@@ -1,0 +1,29 @@
+FROM debezium/connect:2.4
+
+USER root
+
+# v2: conector na linha 4.x (era 2.1.2 no projeto anterior).
+# 4.1.0 e o <release> corrente do maven-metadata.xml de
+# com.snowflake:snowflake-kafka-connector, verificado em 2026-08-07.
+# A linha 4 traz o SnowflakeStreamingSinkConnector (Snowpipe Streaming
+# nativo) que a feature MIGRACAO_INGESTAO_V4 vai configurar em
+# connectors/snowflake_sink.json -- este Dockerfile so instala o JAR.
+ENV SNOWFLAKE_CONNECTOR_VERSION=4.1.0 \
+    CONNECT_PLUGIN_PATH=/kafka/connect
+
+RUN mkdir -p ${CONNECT_PLUGIN_PATH}/snowflake-connector
+
+# Snowflake Kafka Connector (oficial, ja inclui suporte a Avro + Schema Registry)
+RUN curl -fsSL \
+    "https://repo1.maven.org/maven2/com/snowflake/snowflake-kafka-connector/${SNOWFLAKE_CONNECTOR_VERSION}/snowflake-kafka-connector-${SNOWFLAKE_CONNECTOR_VERSION}.jar" \
+    -o ${CONNECT_PLUGIN_PATH}/snowflake-connector/snowflake-kafka-connector.jar
+
+# Bouncy Castle (exigido pela autenticacao key-pair do Snowflake)
+RUN curl -fsSL \
+    "https://repo1.maven.org/maven2/org/bouncycastle/bc-fips/1.0.2.4/bc-fips-1.0.2.4.jar" \
+    -o ${CONNECT_PLUGIN_PATH}/snowflake-connector/bc-fips.jar && \
+    curl -fsSL \
+    "https://repo1.maven.org/maven2/org/bouncycastle/bcpkix-fips/1.0.7/bcpkix-fips-1.0.7.jar" \
+    -o ${CONNECT_PLUGIN_PATH}/snowflake-connector/bcpkix-fips.jar
+
+USER kafka

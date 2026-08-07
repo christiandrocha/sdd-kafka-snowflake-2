@@ -1,0 +1,46 @@
+hostPort: kafka:9101
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  # Consumer group lag
+  - pattern: 'kafka.consumer<type=consumer-fetch-manager-metrics, client-id=(.+), topic=(.+), partition=(.+)><>records-lag'
+    name: kafka_consumer_group_lag
+    labels:
+      client_id: "$1"
+      topic: "$2"
+      partition: "$3"
+  # Messages in per topic
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=MessagesInPerSec, topic=(.+)><>Count'
+    name: kafka_server_brokertopicmetrics_messagesin_total
+    labels:
+      topic: "$1"
+  # Bytes in per topic
+  - pattern: 'kafka.server<type=BrokerTopicMetrics, name=BytesInPerSec, topic=(.+)><>Count'
+    name: kafka_server_brokertopicmetrics_bytesin_total
+    labels:
+      topic: "$1"
+  # Under-replicated partitions
+  - pattern: 'kafka.server<type=ReplicaManager, name=UnderReplicatedPartitions><>Value'
+    name: kafka_server_replicamanager_underreplicatedpartitions
+  # Active controller count
+  - pattern: 'kafka.controller<type=KafkaController, name=ActiveControllerCount><>Value'
+    name: kafka_controller_activecontrollercount
+  # Offline partitions
+  - pattern: 'kafka.controller<type=KafkaController, name=OfflinePartitionsCount><>Value'
+    name: kafka_controller_offlinepartitionscount
+  # Request rate
+  - pattern: 'kafka.network<type=RequestMetrics, name=RequestsPerSec, request=(.+)><>Count'
+    name: kafka_network_requestmetrics_requestspersec
+    labels:
+      request: "$1"
+  # Log size per topic-partition
+  - pattern: 'kafka.log<type=Log, name=Size, topic=(.+), partition=(.+)><>Value'
+    name: kafka_log_size_bytes
+    labels:
+      topic: "$1"
+      partition: "$2"
+  # Consumer last commit timestamp
+  - pattern: 'kafka.consumer<type=consumer-coordinator-metrics, client-id=(.+)><>last-heartbeat-seconds-ago'
+    name: kafka_consumer_last_heartbeat_seconds_ago
+    labels:
+      client_id: "$1"

@@ -1,0 +1,302 @@
+# version: "3.8"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# sdd-kafka-snowflake v5.0.0
+# PostgreSQL → Debezium → Kafka → Schema Registry → Snowflake Sink → Snowflake
+# dbt Core (Bronze/Silver/Gold) orchestrated by Dagster
+#
+# v5 vs v4: adiciona dagster-postgres (TD-08 — storage dedicado, separado da
+# fonte CDC para evitar dependência circular; ver ADR-0018). O comentário de
+# versão estava desatualizado (dizia v2.0.0 mesmo com CLAUDE.md em v4.0.0) —
+# corrigido aqui também.
+# ──────────────────────────────────────────────────────────────────────────────
+
+x-snowflake-env: &snowflake-env
+  env_file: .env
+
+services:
+
+  # ── Coordination ─────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Message Broker ────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: kafka
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ── Schema Registry ───────────────────────────────────────────────────────────
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/subjects"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ── Source Database ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=4"
+      - "-c"
+      - "max_wal_senders=4"
+    volumes:
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Dagster Storage (TD-08) — separado da fonte CDC (ADR-0018) ───────────────
+  dagster-postgres:
+    image: postgres:15
+    container_name: dagster-postgres
+    environment:
+      POSTGRES_DB: ${DAGSTER_PG_DB:-dagster}
+      POSTGRES_USER: ${DAGSTER_PG_USER:-dagster}
+      POSTGRES_PASSWORD: ${DAGSTER_PG_PASSWORD:?defina DAGSTER_PG_PASSWORD no .env}
+    volumes:
+      - dagster_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DAGSTER_PG_USER:-dagster} -d ${DAGSTER_PG_DB:-dagster}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Kafka Connect (Debezium + Snowflake Sink) ─────────────────────────────────
+  kafka-connect:
+    build:
+      context: .
+      dockerfile: Dockerfile.connect
+    container_name: kafka-connect
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    env_file: .env
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: kafka-connect-group
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    volumes:
+      # Chaves key-pair do Snowflake, somente leitura. O .env aponta
+      # SNOWFLAKE_PRIVATE_KEY_PATH para /secrets/dagster_key.p8.
+      - ./keys:/secrets:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8083/connectors"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+
+  # ── Dagster Webserver ─────────────────────────────────────────────────────────
+  dagster:
+    build:
+      context: .
+      dockerfile: dagster/Dockerfile
+    container_name: dagster-webserver
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      DAGSTER_HOME: /opt/dagster/dagster_home
+      DBT_TARGET: ${DBT_TARGET:-dev}
+      DAGSTER_PG_HOST: dagster-postgres
+      DAGSTER_PG_USER: ${DAGSTER_PG_USER:-dagster}
+      DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?defina DAGSTER_PG_PASSWORD no .env}
+      DAGSTER_PG_DB: ${DAGSTER_PG_DB:-dagster}
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - ./dbt:/opt/dagster/dbt
+      - ./dagster:/opt/dagster/app
+      - ./scripts:/opt/dagster/scripts
+      - dagster_home:/opt/dagster/dagster_home
+      - ./keys:/secrets:ro
+    command: dagster-webserver -h 0.0.0.0 -p 3000 -w /opt/dagster/app/workspace.yaml
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+      dagster-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3000/server_info')"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ── Dagster Daemon (sensor + run executor) ───────────────────────────────────
+  dagster-daemon:
+    build:
+      context: .
+      dockerfile: dagster/Dockerfile
+    container_name: dagster-daemon
+    env_file: .env
+    environment:
+      DAGSTER_HOME: /opt/dagster/dagster_home
+      DBT_TARGET: ${DBT_TARGET:-dev}
+      DAGSTER_PG_HOST: dagster-postgres
+      DAGSTER_PG_USER: ${DAGSTER_PG_USER:-dagster}
+      DAGSTER_PG_PASSWORD: ${DAGSTER_PG_PASSWORD:?defina DAGSTER_PG_PASSWORD no .env}
+      DAGSTER_PG_DB: ${DAGSTER_PG_DB:-dagster}
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - ./dbt:/opt/dagster/dbt
+      - ./dagster:/opt/dagster/app
+      - ./scripts:/opt/dagster/scripts
+      - dagster_home:/opt/dagster/dagster_home
+      - ./keys:/secrets:ro
+    command: dagster-daemon run -w /opt/dagster/app/workspace.yaml
+    depends_on:
+      dagster:
+        condition: service_healthy
+      dagster-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Kafka UI ──────────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+      - schema-registry
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: kafka-connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
+
+  # ── JMX Exporter (Kafka metrics → Prometheus) ────────────────────────────────
+  jmx-exporter:
+    image: bitnami/jmx-exporter:latest
+    container_name: jmx-exporter
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./observability/jmx/kafka-jmx-exporter.yml:/opt/jmx-exporter/config.yml
+    command: "5556 /opt/jmx-exporter/config.yml"
+    environment:
+      JMX_HOST: kafka
+      JMX_PORT: "9101"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ── Kafka Exporter (consumer group lag via AdminClient) ──────────────────────
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka-exporter
+    command:
+      - --kafka.server=kafka:29092
+      - --web.listen-address=:9308
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Prometheus ────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.49.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./observability/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - jmx-exporter
+      - kafka-exporter
+      - kafka-connect
+
+  # ── Grafana ───────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+
+volumes:
+  dagster_home:
+  dagster_postgres_data:

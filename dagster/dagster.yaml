@@ -1,0 +1,39 @@
+# dagster.yaml — v5 (TD-08: SQLite não é adequado para produção)
+#
+# ANTES: storage sqlite (dagster_home volume) — funciona só em baixa
+# concorrência, frágil a corrupção em crash durante escrita, sem suporte
+# real a múltiplos processos escrevendo ao mesmo tempo.
+#
+# AGORA: Postgres dedicado (serviço `dagster-postgres` no docker-compose,
+# NÃO o mesmo Postgres que é fonte do CDC). Isso é deliberado — ver
+# ADR-0018: usar o Postgres fonte do CDC para o storage do Dagster criaria
+# uma dependência circular (se a fonte cai, o orquestrador cai junto).
+#
+# NÃO TESTADO AO VIVO.
+
+storage:
+  postgres:
+    postgres_db:
+      hostname:
+        env: DAGSTER_PG_HOST
+      username:
+        env: DAGSTER_PG_USER
+      password:
+        env: DAGSTER_PG_PASSWORD
+      db_name:
+        env: DAGSTER_PG_DB
+      port: 5432
+
+run_launcher:
+  module: dagster.core.launcher
+  class: DefaultRunLauncher
+
+scheduler:
+  module: dagster.core.scheduler
+  class: DagsterDaemonScheduler
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 5

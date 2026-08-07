@@ -1,0 +1,89 @@
+groups:
+  - name: kafka_cdc_alerts
+    rules:
+
+      - alert: KafkaConsumerLagHigh
+        expr: kafka_consumer_group_lag > 10000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag too high"
+          description: "Consumer lag for {{ $labels.topic }} is {{ $value }} messages. Snowflake Sink may be falling behind."
+
+      - alert: KafkaConnectTaskFailed
+        expr: kafka_connect_connector_task_status != 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka Connect task failed"
+          description: "Connector {{ $labels.connector }} task {{ $labels.task }} is not RUNNING."
+
+      - alert: DagsterRunFailed
+        expr: dagster_run_status{status="FAILURE"} > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dagster pipeline run failed"
+          description: "dbt pipeline run failed — check Dagster UI at http://localhost:3000"
+
+      - alert: KafkaBrokerDown
+        expr: up{job="kafka-jmx"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka JMX exporter unreachable"
+          description: "JMX exporter for Kafka is down — broker may be unhealthy."
+
+      - alert: BronzeFreshnessViolation
+        expr: >
+          (time() - kafka_consumer_group_last_commit_timestamp_ms / 1000) > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bronze table freshness SLA violated"
+          description: "No new commits to Bronze topic {{ $labels.topic }} in over 15 minutes."
+
+      # ── v5: alertas de governança de custo e saúde do gate de disparo ──────
+      # Adicionados após o diagnóstico de consumo de crédito ocioso desta
+      # análise (item C.6/C.5 do plano de melhorias). Requerem que o
+      # Prometheus tenha um exporter capaz de expor
+      # snowflake_warehouse_credits_used_total — não incluído neste projeto;
+      # normalmente vem de um job agendado que consulta
+      # ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY e empurra via Pushgateway,
+      # já que o Snowflake não expõe um endpoint /metrics nativo.
+      # NÃO TESTADO — depende desse exporter, que ainda não existe no projeto.
+
+      - alert: SnowflakeWarehouseCreditsSpikeDaily
+        expr: increase(snowflake_warehouse_credits_used_total{warehouse="CDC_WH"}[24h]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CDC_WH consumiu mais de 5 créditos em 24h"
+          description: "Acima do esperado para um pipeline gated por Streams+Tasks nativos (que só devem cobrar quando há dado real). Investigar se o gate está falhando aberto."
+
+      - alert: DagsterSensorDown
+        expr: up{job="dagster-daemon"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dagster daemon (sensores) fora do ar"
+          description: "bronze_new_data_sensor e registry_new_subject_sensor não estão rodando — pipeline não vai disparar mesmo com dado novo no Snowflake."
+
+      - alert: DagsterSensorSilentButKafkaActive
+        expr: >
+          (increase(kafka_server_brokertopicmetrics_messagesin_total[15m]) > 0)
+          and (up{job="dagster-daemon"} == 1)
+          and (increase(dagster_run_status{status="STARTED"}[15m]) == 0)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka com tráfego mas Dagster não disparou nenhum run"
+          description: "Sensor está de pé (up=1) mas não está gerando RunRequest apesar de atividade no Kafka — possível bug lógico no gate (Streams+Tasks ou CONFIG.PENDING_RUNS), não uma queda de serviço."
