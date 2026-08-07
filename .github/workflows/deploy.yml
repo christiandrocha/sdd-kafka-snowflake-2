@@ -1,0 +1,88 @@
+# deploy.yml — v5
+#
+# NOTA IMPORTANTE: este arquivo é referenciado em CLAUDE.md ("Project
+# structure") como já existente, mas não está presente no repositório
+# analisado — junto com ci.yml e toda a pasta .github/, ausentes do zip
+# baixado (mesmo padrão de perda dos arquivos 01/02/03 da metodologia SDD).
+# Por isso este é um arquivo NOVO, escrito do zero seguindo o que o
+# CLAUDE.md descreve que ele deveria fazer (registrar conectores + reiniciar
+# Dagster), não a correção de um placeholder existente (TD-18 assumia que
+# havia um passo de restart incompleto num arquivo que já existia).
+#
+# NÃO TESTADO — não há repositório GitHub real conectado durante esta
+# análise para validar que os secrets/ambiente batem. Revisar os nomes dos
+# GitHub Secrets antes do primeiro merge para main.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "connectors/**"
+      - "dbt/**"
+      - "dagster/**"
+      - "scripts/**"
+      - "docker-compose*.yml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar .env a partir dos secrets
+        run: |
+          cat <<EOF > .env
+          SNOWFLAKE_ACCOUNT=${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER=${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}
+          SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}
+          SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}
+          SNOWFLAKE_PRIVATE_KEY_PATH=/run/secrets/rsa_key.p8
+          POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+          DAGSTER_PG_DB=${{ secrets.DAGSTER_PG_DB }}
+          DAGSTER_PG_USER=${{ secrets.DAGSTER_PG_USER }}
+          DAGSTER_PG_PASSWORD=${{ secrets.DAGSTER_PG_PASSWORD }}
+          EOF
+
+      - name: Subir/atualizar stack
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+      - name: Aguardar Kafka Connect saudável
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8083/connectors > /dev/null; then
+              echo "Kafka Connect pronto"; break
+            fi
+            [ "$i" -eq 30 ] && echo "Timeout aguardando Kafka Connect" && exit 1
+            sleep 5
+          done
+
+      - name: Registrar conectores
+        run: ./scripts/register_connectors.sh --env prod
+
+      - name: Reiniciar Dagster (daemon + webserver) — implementação real, não placeholder
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml restart dagster-daemon dagster
+          # Confirma que o webserver voltou a responder antes de considerar sucesso.
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/server_info > /dev/null; then
+              echo "Dagster webserver saudável pós-restart"; exit 0
+            fi
+            sleep 5
+          done
+          echo "Dagster não respondeu após restart" && exit 1
+
+      - name: Aplicar governança Snowflake (Resource Monitor, Time Travel, Streams+Tasks)
+        run: |
+          echo "Rode manualmente via SnowSQL/worksheet como ACCOUNTADMIN:"
+          echo "  scripts/snowflake_setup.sql"
+          echo "  scripts/streams_and_tasks.sql"
+          echo "Não automatizado neste workflow propositalmente — mudanças de"
+          echo "governança de conta (RESOURCE MONITOR, GRANT EXECUTE TASK) exigem"
+          echo "ACCOUNTADMIN e revisão humana, não deveriam rodar sem supervisão"
+          echo "a cada push para main."

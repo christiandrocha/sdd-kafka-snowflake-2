@@ -1,0 +1,53 @@
+.DS_Store
+
+# Secrets — never commit credentials
+.env
+**/.env
+*.env.local
+*.key
+*.pem
+
+# Python project venvs & caches (demos/)
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Large media — use external storage or LFS, not git
+*.mp4
+*.mov
+*.webm
+*.screenstudio/
+
+# Local recordings
+aulas/
+screenstudio/
+
+# Tooling caches
+.playwright-mcp/
+
+# Editor/OS noise
+.vscode/
+.idea/
+*.swp
+*~
+
+# PR-4 cached demo image (downloaded at runtime)
+demos/**/sample_image.jpg
+*.p8
+
+# Chaves Snowflake — o diretório inteiro, inclusive as .pub
+keys/
+
+# ── Escopo deste repositório ────────────────────────────────────────────
+# Este repo público cobre apenas a stack Kafka → Snowflake.
+# O conteúdo do curso (Formação AI Data Engineer) vive fora dele.
+presentation/
+docs/
+demos/
+images/
+.claude/
+.cursor/
+AGENTS.md
+CLAUDE.md

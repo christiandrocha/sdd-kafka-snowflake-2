@@ -1,0 +1,65 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+scrape_configs:
+
+  # Metricas do broker Kafka via JMX exporter.
+  # Expoe: throughput por topico, request rate, tamanho de log, controller.
+  # Produz kafka_server_brokertopicmetrics_messagesin_total, usada tanto pelo
+  # alerta DagsterSensorSilentButKafkaActive quanto pelo
+  # registry_new_subject_sensor (dagster/pipeline/sensors.py:57) como gate
+  # de custo zero antes de tocar o Snowflake.
+  - job_name: kafka-jmx
+    static_configs:
+      - targets: ['jmx-exporter:5556']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: kafka
+
+  # Lag de consumer group via AdminClient (danielqsj/kafka-exporter).
+  # Expoe kafka_consumergroup_lag{consumergroup,topic,partition} -- note que
+  # o alerta KafkaConsumerLagHigh usa kafka_consumer_group_lag (com underscore
+  # entre "consumer" e "group"), que vem do jmx-exporter acima, nao daqui.
+  # Sao duas metricas diferentes com a mesma intencao; ver nota no relatorio.
+  - job_name: kafka-exporter
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: kafka
+
+  # Auto-monitoramento -- garante que up{job="prometheus"} exista para
+  # diferenciar "alerta nao disparou" de "Prometheus nao estava coletando".
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+# ---------------------------------------------------------------------------
+# Jobs deliberadamente AUSENTES (2026-08-07)
+#
+# - kafka-connect: o alerta KafkaConnectTaskFailed espera
+#   kafka_connect_connector_task_status. A porta 8083 do servico kafka-connect
+#   e a REST API, nao um endpoint /metrics -- apontar um scrape_config para ela
+#   so produziria target DOWN permanente. Exige um javaagent JMX exporter dentro
+#   do Dockerfile.connect, que nao foi adicionado.
+#
+# - dagster-daemon: os alertas DagsterSensorDown, DagsterRunFailed e
+#   DagsterSensorSilentButKafkaActive esperam up{job="dagster-daemon"} e
+#   dagster_run_status. O servico dagster-daemon nao expoe porta de metricas
+#   no docker-compose.yml (nao ha `ports:` nem endpoint /metrics).
+#
+# - snowflake: o alerta SnowflakeWarehouseCreditsSpikeDaily espera
+#   snowflake_warehouse_credits_used_total. O Snowflake nao tem endpoint
+#   /metrics nativo; exigiria job agendado sobre
+#   ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY empurrando via Pushgateway
+#   (ja anotado no proprio alert_rules.yml, linhas 51-59).
+#
+# Enquanto esses tres jobs nao existirem, os alertas correspondentes ficam
+# permanentemente sem serie temporal -- nao disparam nem em falha real.
+# ---------------------------------------------------------------------------
