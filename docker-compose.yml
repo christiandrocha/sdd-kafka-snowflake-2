@@ -9,7 +9,16 @@
 # fonte CDC para evitar dependência circular; ver ADR-0018). O comentário de
 # versão estava desatualizado (dizia v2.0.0 mesmo com CLAUDE.md em v4.0.0) —
 # corrigido aqui também.
+#
+# 2026-08-07: nomes de container prefixados com `v2-` e nome de projeto
+# explícito. O projeto anterior (compose em ../sdd-kafka-snowflake/infra, nome
+# de projeto `infra`) usa os mesmos nomes fixos — `kafka`, `postgres`,
+# `prometheus`… — e ainda tem containers vivos. Sem o prefixo, `up` aqui falha
+# com conflito de nome. O prefixo também mantém os volumes deste projeto
+# separados (`sdd-kafka-snowflake-2_*` vs `infra_*`).
 # ──────────────────────────────────────────────────────────────────────────────
+
+name: sdd-kafka-snowflake-2
 
 x-snowflake-env: &snowflake-env
   env_file: .env
@@ -19,7 +28,7 @@ services:
   # ── Coordination ─────────────────────────────────────────────────────────────
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
-    container_name: zookeeper
+    container_name: v2-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
@@ -32,7 +41,7 @@ services:
   # ── Message Broker ────────────────────────────────────────────────────────────
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: kafka
+    container_name: v2-kafka
     depends_on:
       zookeeper:
         condition: service_healthy
@@ -58,7 +67,7 @@ services:
   # ── Schema Registry ───────────────────────────────────────────────────────────
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
-    container_name: schema-registry
+    container_name: v2-schema-registry
     depends_on:
       kafka:
         condition: service_healthy
@@ -78,7 +87,7 @@ services:
   # ── Source Database ───────────────────────────────────────────────────────────
   postgres:
     image: postgres:15
-    container_name: postgres
+    container_name: v2-postgres
     ports:
       - "5432:5432"
     env_file: .env
@@ -105,7 +114,7 @@ services:
   # ── Dagster Storage (TD-08) — separado da fonte CDC (ADR-0018) ───────────────
   dagster-postgres:
     image: postgres:15
-    container_name: dagster-postgres
+    container_name: v2-dagster-postgres
     environment:
       POSTGRES_DB: ${DAGSTER_PG_DB:-dagster}
       POSTGRES_USER: ${DAGSTER_PG_USER:-dagster}
@@ -123,7 +132,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.connect
-    container_name: kafka-connect
+    container_name: v2-kafka-connect
     depends_on:
       kafka:
         condition: service_healthy
@@ -161,7 +170,7 @@ services:
     build:
       context: .
       dockerfile: dagster/Dockerfile
-    container_name: dagster-webserver
+    container_name: v2-dagster-webserver
     ports:
       - "3000:3000"
     env_file: .env
@@ -196,7 +205,7 @@ services:
     build:
       context: .
       dockerfile: dagster/Dockerfile
-    container_name: dagster-daemon
+    container_name: v2-dagster-daemon
     env_file: .env
     environment:
       DAGSTER_HOME: /opt/dagster/dagster_home
@@ -223,7 +232,7 @@ services:
   # ── Kafka UI ──────────────────────────────────────────────────────────────────
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    container_name: kafka-ui
+    container_name: v2-kafka-ui
     depends_on:
       - kafka
       - schema-registry
@@ -239,7 +248,7 @@ services:
   # ── JMX Exporter (Kafka metrics → Prometheus) ────────────────────────────────
   jmx-exporter:
     image: bitnami/jmx-exporter:latest
-    container_name: jmx-exporter
+    container_name: v2-jmx-exporter
     ports:
       - "5556:5556"
     volumes:
@@ -255,7 +264,7 @@ services:
   # ── Kafka Exporter (consumer group lag via AdminClient) ──────────────────────
   kafka-exporter:
     image: danielqsj/kafka-exporter:latest
-    container_name: kafka-exporter
+    container_name: v2-kafka-exporter
     command:
       - --kafka.server=kafka:29092
       - --web.listen-address=:9308
@@ -267,7 +276,7 @@ services:
   # ── Prometheus ────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.49.0
-    container_name: prometheus
+    container_name: v2-prometheus
     ports:
       - "9090:9090"
     volumes:
@@ -285,7 +294,7 @@ services:
   # ── Grafana ───────────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:10.2.0
-    container_name: grafana
+    container_name: v2-grafana
     ports:
       - "3001:3000"
     environment:

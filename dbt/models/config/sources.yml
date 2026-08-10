@@ -1,0 +1,69 @@
+version: 2
+
+sources:
+  - name: bronze_raw
+    database: CDC_POC
+    schema: BRONZE
+    description: >
+      Tabelas cruas escritas pelo SnowflakeStreamingSinkConnector (v4) via
+      Snowpipe Streaming nativo. Sob `snowflake.enable.schematization=true`
+      cada campo do valor Kafka vira coluna TIPADA em MAIUSCULO -- nao ha
+      mais RECORD_CONTENT VARIANT. O RECORD_METADATA continua presente
+      (chaves snowflake.metadata.* seguem existindo no conector 4.1.0) e
+      carrega offset, partition e CreateTime, usados como watermark
+      incremental e desempate de deduplicacao nos modelos Bronze.
+
+      Alem das colunas do Postgres, cada tabela tem __OP e __SOURCE_TS_MS,
+      injetadas pelo SMT ExtractNewRecordState do Debezium
+      (transforms.unwrap.add.fields=op,source.ts_ms com prefixo __).
+
+      Escopo: 10 dominios Tier 1. Os 10 Tier 2 sairam por
+      DEFINE_MIGRACAO_INGESTAO_V4 e nao sao mais ingeridos.
+    freshness:
+      warn_after:  {count: 5,  period: minute}
+      error_after: {count: 15, period: minute}
+    loaded_at_field: "RECORD_METADATA:CreateTime::TIMESTAMP_NTZ"
+    tables:
+      - name: PAYMENT_EVENTS
+        description: >
+          CDC de pg.public.payment_events. O campo `event` e JSONB no
+          Postgres e o Debezium o serializa como string, entao a
+          schematizacao cria VARCHAR -- PARSE_JSON continua necessario no
+          modelo. Timestamp interno chega como int ou float (notacao
+          cientifica), ambos epoch ms.
+
+      - name: ORDERS
+        description: >
+          CDC de pg.public.orders. Tabela hub -- liga os dominios via CPF
+          (user_key), CNPJ (restaurant_key), driver_id, payment UUID.
+          rating_key aponta para dominio Tier 2 removido.
+
+      - name: ORDER_ITEMS
+        description: >
+          CDC de pg.public.order_items. Maior volume do projeto. No v2.1.2
+          tinha conector Sink proprio por causa do buffer client-side; no v4
+          esse buffer nao existe e o dominio voltou ao conector unico.
+
+      - name: DRIVER_SHIFTS
+        description: CDC de pg.public.driver_shifts. Turnos do entregador.
+
+      - name: SEARCH_EVENTS
+        description: >
+          CDC de pg.public.search_events. Coluna de origem chamada TIMESTAMP
+          -- referenciada entre aspas no modelo.
+
+      - name: RECOMMENDATIONS
+        description: >
+          CDC de pg.public.recommendations. Mesma questao do TIMESTAMP.
+
+      - name: USERS_MONGO
+        description: CDC de pg.public.users_mongo. CPF = user_key em orders.
+
+      - name: USERS_MSSQL
+        description: CDC de pg.public.users_mssql. Mesmo CPF do users_mongo.
+
+      - name: RESTAURANTS
+        description: CDC de pg.public.restaurants. CNPJ = restaurant_key em orders.
+
+      - name: DRIVERS
+        description: CDC de pg.public.drivers. driver_id = driver_key em orders.

@@ -1,0 +1,37 @@
+{
+  "name": "debezium-postgres-cdc",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "${POSTGRES_USER}",
+    "database.password": "${POSTGRES_PASSWORD}",
+    "database.dbname": "${POSTGRES_DB}",
+    "topic.prefix": "pg",
+
+    "table.include.list": "public.payment_events,public.orders,public.order_items,public.driver_shifts,public.search_events,public.recommendations,public.users_mongo,public.users_mssql,public.restaurants,public.drivers",
+
+    "plugin.name": "pgoutput",
+    "publication.name": "dbz_publication",
+    "slot.name": "debezium_slot",
+    "snapshot.mode": "initial",
+
+    "decimal.handling.mode": "double",
+    "time.precision.mode": "connect",
+    "interval.handling.mode": "string",
+
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.add.fields": "op,source.ts_ms",
+    "transforms.unwrap.add.fields.prefix": "__",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.drop.tombstones": "false",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter.auto.register.schemas": "true"
+  }
+}
