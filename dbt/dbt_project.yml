@@ -9,10 +9,35 @@ macro-paths:  ["macros"]
 target-path:  "target"
 clean-targets: ["target", "dbt_packages"]
 
-# Esqueleto: as pastas models/{bronze,silver,gold} existem mas estão vazias.
-# Os 10 models Bronze chegam no build do MIGRACAO_INGESTAO_V4, já escritos
-# sobre colunas tipadas (schematização do conector v4), não sobre
-# RECORD_CONTENT/RECORD_METADATA VARIANT como no projeto anterior.
+# CADA BLOCO DECLARA O QUE A CAMADA REALMENTE USA.
+#
+# Até 2026-08-10 os três blocos declaravam `incremental` + `merge`, herdado de
+# quando as pastas estavam vazias. Nenhum model de silver ou gold usava isso:
+# os 10 da Silver e 4 dos 6 da Gold são `table`. O default não era só letra
+# morta — era armadilha. Model novo largado em models/silver/ herdaria
+# `incremental` com `merge` e SEM `unique_key`, e nessa combinação o dbt
+# degrada para append puro: cada execução reinsere tudo, em silêncio.
+#
+# Por que cada camada é o que é:
+#
+#   bronze -> incremental/merge. Append CDC bruto, com watermark por
+#             kafka_created_at e MERGE por chave de negócio para ser
+#             idempotente sobre reentrega do Snowpipe Streaming.
+#
+#   silver -> table. MERGE não apaga linha. Num incremental, chave deletada na
+#             origem sobreviveria para sempre, porque a linha `op='d'` é
+#             filtrada pelo resolve_cdc e nunca chega ao merge. Ver o
+#             cabeçalho de silver_orders.sql.
+#
+#   gold   -> table como default seguro (rebuild sempre está correto, no
+#             máximo é lento). Os dois models que são de fato aditivos por
+#             chave — gold_payment_lifecycle e gold_payments_by_status —
+#             declaram `incremental` no próprio arquivo, junto com o
+#             `unique_key` e o `on_schema_change` de que dependem.
+#
+# `incremental_strategy` e `on_schema_change` saíram dos blocos de silver e
+# gold: o dbt só os consulta em materialização incremental, então aqui eram
+# inertes e sugeriam um comportamento que a camada não tem.
 models:
   sdd_kafka_snowflake:
     bronze:
@@ -22,14 +47,10 @@ models:
       +on_schema_change: sync_all_columns
       +tags: ["bronze", "cdc"]
     silver:
-      +materialized: incremental
+      +materialized: table
       +schema: SILVER
-      +incremental_strategy: merge
-      +on_schema_change: sync_all_columns
       +tags: ["silver", "cdc"]
     gold:
-      +materialized: incremental
+      +materialized: table
       +schema: GOLD
-      +incremental_strategy: merge
-      +on_schema_change: sync_all_columns
       +tags: ["gold", "analytics"]

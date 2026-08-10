@@ -3,7 +3,8 @@
         materialized         = 'incremental',
         schema               = 'GOLD',
         unique_key           = 'payment_id',
-        incremental_strategy = 'merge'
+        incremental_strategy = 'merge',
+        on_schema_change     = 'sync_all_columns'
     )
 }}
 
