@@ -179,7 +179,7 @@ The lever that does move the needle is the **number of resume episodes**, not th
 
 The trigger for revisiting this is wall time crossing 60 seconds in a single invocation, not table size. If `silver_order_items` ever gets there, the answer is `incremental` with partitioned `delete+insert` — **not** `merge`, which would reintroduce the deleted-key-survives-forever bug.
 
-**Not verified:** actual billed credits. `WAREHOUSE_METERING_HISTORY` in `INFORMATION_SCHEMA` returned no rows and `SNOWFLAKE.ACCOUNT_USAGE` is out of reach for `CDC_ROLE`. The warehouse's own `resource_monitor` field is empty; an account-level monitor may exist but confirming it needs `ACCOUNTADMIN`. Both gaps are what `scripts/verify_governance.sql` was written to close.
+The figures above are **execution time**, not billed credits — see [Known gaps](#known-gaps-and-unverified-claims) for what could not be measured and why.
 
 ---
 
@@ -371,6 +371,43 @@ Run manually through SnowSQL or a worksheet — deliberately **not** automated, 
 `.github/workflows/deploy.yml` triggers on pushes to `main` that touch `connectors/`, `dbt/` or the compose files, and assembles `.env` from GitHub Secrets.
 
 **It has never run against a real environment.** Before first use, note that it still references two files absent from the repository: `docker-compose.prod.yml` and `scripts/snowflake_setup.sql`.
+
+---
+
+## Known gaps and unverified claims
+
+Everything below is either untested or waiting on a human decision. It is listed here rather than left implicit, because the expensive failures on this project have all come from something nobody had run yet.
+
+### Cannot be verified with the credentials in this repository
+
+The three service identities under `keys/` hold exactly one role each — `DAGSTER_SERVICE_USER` and `DATA_AGENTS_MCP_USER` on `CDC_ROLE`, `CURSOR_MCP_USER` on `CDC_ROLE_RO`. None can assume `ACCOUNTADMIN`, so the following need a human on a Snowflake worksheet:
+
+| Claim | Status | How to close it |
+|---|---|---|
+| Billed credit consumption | **Unknown.** `SNOWFLAKE.ACCOUNT_USAGE` is not authorized for `CDC_ROLE`; the `INFORMATION_SCHEMA` metering function runs but returns no rows | `scripts/verify_governance.sql` step 4, as `ACCOUNTADMIN` |
+| Account-level Resource Monitor | **Unknown.** The warehouse's own `resource_monitor` field is null, so any protection would have to be account-level. `SHOW RESOURCE MONITORS` returns zero rows under `CDC_ROLE` — and zero rows there is indistinguishable from "none exists", which is the trap the script now warns about | `verify_governance.sql` steps 1 and 2, as `ACCOUNTADMIN` |
+| The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`) | **Open** since the script was written | Same run resolves it |
+| 1-day Time Travel on Bronze | **Asserted, never checked** in this session | `SHOW TABLES IN SCHEMA CDC_POC.BRONZE` and read `retention_time` |
+
+### Untested code paths
+
+| Path | Why it matters |
+|---|---|
+| Incremental MERGE **updating an existing row** in `gold_payment_lifecycle` | The no-op path is verified: a second run with no new events merged 0 rows and left the table intact. The path that recomputes a payment after a late event has never run, because no new payment event has arrived since the model was built. One INSERT into `payment_events` at the source would close it |
+| CI/CD (`.github/workflows/deploy.yml`) | Never executed against any environment, and still references two files absent from the repository: `docker-compose.prod.yml` and `scripts/snowflake_setup.sql` |
+
+### Waiting on a decision
+
+| Item | The decision |
+|---|---|
+| Test severity convention | Applied to 102 Silver and Gold tests, but Decision 3 of `DESIGN_GOVERNANCA_QUALIDADE_DADOS` is still marked *Proposed — requires human review*. Ratify it or change it |
+| `payment_id` cardinality | 2,210 events over 8 identifiers makes three Gold models structurally correct and commercially meaningless. Regenerate the seed data, or accept those models as scaffolding |
+| Missing `DEFINE` and `DESIGN` for the Silver and Gold layers | The build happened without them; `BUILD_REPORT_CAMADAS_SILVER_GOLD.md` opens by declaring the gap. Write them retroactively or accept the debt explicitly |
+| `GOVERNANCA_QUALIDADE_DADOS` | Has a `DEFINE` and a `DESIGN` and was never built |
+
+### Operational fragility
+
+The Dagster asset graph is frozen at container import time. **Adding a dbt model requires restarting `dagster-daemon`** — without it, the pipeline keeps running successfully while silently ignoring the new layer. This actually happened on 2026-08-10: Gold models existed and were materializable by hand for about an hour while the sensor-triggered job still only knew about Bronze and Silver.
 
 ---
 
