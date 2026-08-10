@@ -1,0 +1,137 @@
+version: 2
+
+# Gold -- seis agregacoes sobre a Silver. Ao contrario da Silver, que era
+# SELECT * de um modelo Bronze, cada modelo Gold tem um GRAO PROPRIO, e o grao
+# e a coisa mais importante a testar: e ele que quebra silenciosamente quando
+# alguem remove um QUALIFY ou troca um LEFT JOIN de lado.
+#
+# Por isso todo modelo aqui tem unique + not_null na chave do grao, em
+# severidade error. Nao e formalidade: tres desses modelos juntam com tabelas
+# cuja unicidade e por chave TECNICA (uuid) e nao pela chave de NEGOCIO usada
+# na juncao (driver_id, restaurant_id, cpf). Sem o QUALIFY que reduz o cadastro
+# a uma linha por chave de negocio, a juncao multiplica linhas de fato e infla
+# somatorios -- e o unique no grao e o unico teste que pega isso.
+#
+# Severidade: mesma convencao da Silver (ver models/silver/schema.yml).
+#   error -> invariante garantida pelo codigo deste repositorio
+#   warn  -> integridade referencial entre dominios, que depende da origem
+
+models:
+  - name: gold_payment_lifecycle
+    description: >
+      Uma linha por pagamento, com o instante de cada etapa do ciclo pivotado em coluna. Modelo de referencia do padrao aditivo-particionavel: incremental por payment_id, recalculando cada pagamento afetado por inteiro.
+    columns:
+      - name: payment_id
+        description: "Grao do modelo. Cardinalidade degenerada nos dados atuais: 8 valores distintos para 2.210 eventos."
+        tests: [unique, not_null]
+
+      - name: total_eventos
+        description: "Eventos que compoem o pagamento. Nunca zero -- a linha so existe porque houve evento."
+        tests: [not_null]
+
+      - name: ultimo_evento_ms
+        description: "Watermark do incremental. Nulo aqui quebraria a deteccao de pagamento alterado no run seguinte."
+        tests: [not_null]
+
+  - name: gold_payments_by_status
+    description: >
+      Volume por etapa do ciclo de pagamento. Razao global (o percentual depende do total), materializada como incremental apenas para estabilizar a identidade das 7 linhas via MERGE.
+    columns:
+      - name: event_name
+        description: "Grao do modelo -- uma linha por etapa."
+        tests:
+          - unique
+          - not_null
+          - accepted_values:
+              values: ['created', 'authorized', 'captured', 'succeeded', 'settled', 'closed', 'refunded']
+
+      - name: eventos
+        tests: [not_null]
+
+      - name: pct_dos_eventos
+        description: "Participacao da etapa no total de eventos. A soma das 7 linhas fecha em 100."
+        tests: [not_null]
+
+  - name: gold_payment_funnel
+    description: >
+      Funil do ciclo de pagamento com conversao em relacao ao topo e a etapa anterior. Full refresh por necessidade aritmetica -- nao ha recorte incremental que produza percentual correto.
+    columns:
+      - name: ordem
+        description: "Posicao declarada da etapa no funil. Declarada, nao inferida: ordem alfabetica poria authorized antes de created."
+        tests: [unique, not_null]
+
+      - name: event_name
+        description: "Etapa. refunded nao aparece como linha -- e desvio do fluxo, nao degrau; entra como coluna eventos_reembolso."
+        tests:
+          - unique
+          - not_null
+          - accepted_values:
+              values: ['created', 'authorized', 'captured', 'succeeded', 'settled', 'closed']
+
+      - name: eventos
+        description: "Zero e valor legitimo: etapa sem evento aparece na tabela, que e o ponto de um funil."
+        tests: [not_null]
+
+  - name: gold_driver_performance
+    description: >
+      Desempenho acumulado por entregador: turnos, pedidos, distancia, ganhos e derivados. Aditivo-particionavel por driver_id, ainda em full refresh por volume baixo (469 turnos).
+    columns:
+      - name: driver_id
+        description: >
+          Grao do modelo. O unique aqui e o guarda-costas do QUALIFY que reduz silver_drivers a uma linha por driver_id: sem ele, entregador com dois uuid multiplicaria os proprios turnos.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('silver_drivers')
+              field: driver_id
+              config:
+                severity: warn
+
+      - name: turnos
+        tests: [not_null]
+
+      - name: sem_cadastro
+        description: "Verdadeiro para os 84 turnos cujo driver_id nao existe em silver_drivers. Medidos mesmo assim, por isso o LEFT JOIN parte dos turnos."
+        tests: [not_null]
+
+  - name: gold_revenue_per_restaurant
+    description: >
+      Receita e mix de produto por restaurante, agregados a partir de order_items (nao de orders -- ver o cabecalho do modelo para o porque e para a consequencia na reconciliacao).
+    columns:
+      - name: restaurant_id
+        description: "Grao do modelo. Mesmo papel de guarda-costas do QUALIFY descrito em gold_driver_performance."
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('silver_restaurants')
+              field: restaurant_id
+              config:
+                severity: warn
+
+      - name: receita_bruta
+        description: "Soma dos subtotais de item. NAO reconcilia com a soma de orders.total_amount -- sao medidas de populacoes diferentes."
+        tests: [not_null]
+
+      - name: itens_vendidos
+        tests: [not_null]
+
+  - name: gold_user_behavior
+    description: >
+      Comportamento acumulado por usuario -- pedidos, gasto, buscas e interacoes com recomendacao -- costurando CPF (pedidos) e user_id numerico (eventos) atraves de users_mongo.
+    columns:
+      - name: cpf
+        description: >
+          Grao do modelo. E o teste mais importante da camada: 95 CPFs tem mais de um cadastro nesta base, e sem o QUALIFY do CTE `perfil` cada pedido seria contado duas vezes e o gasto_total sairia inflado.
+        tests: [unique, not_null]
+
+      - name: pedidos
+        description: "Zero para quem nunca comprou -- esses usuarios continuam na tabela de proposito."
+        tests: [not_null]
+
+      - name: gasto_total
+        tests: [not_null]
+
+      - name: nunca_comprou
+        tests: [not_null]
