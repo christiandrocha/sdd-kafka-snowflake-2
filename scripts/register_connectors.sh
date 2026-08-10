@@ -1,6 +1,10 @@
 #!/bin/bash
 # infra/scripts/register_connectors.sh
-# Registers 3 connectors: Debezium + 2 Snowflake Sinks (standard + order_items)
+# Registers 2 connectors: Debezium (source) + Snowflake Sink v4 (single sink).
+# O segundo sink do projeto anterior (`sinkitems`, dedicado a order_items)
+# desapareceu com o conector v4: ele existia por causa do buffer client-side
+# (buffer.count.records/flush.time/size.bytes), configuracao que o JAR 4.1.0
+# nao reconhece mais. Verificado no proprio JAR antes de consolidar.
 # Usage: ./scripts/register_connectors.sh [--env local|prod]
 #
 # NOTA (v5): a retrospectiva do projeto (TD-25) registrava que "curl -sf +
@@ -38,8 +42,8 @@ set -a; source "$ENV_FILE"; set +a
 echo -e "${GREEN}✅  Loaded credentials from ${ENV_FILE}${RESET}"
 
 echo -e "\n${CYAN}══════════════════════════════════════════════════════════${RESET}"
-echo -e "${CYAN}  sdd-kafka-snowflake v4.0.0 — Register Connectors${RESET}"
-echo -e "${CYAN}  20 domains | 3 connectors${RESET}"
+echo -e "${CYAN}  sdd-kafka-snowflake v2 — Register Connectors${RESET}"
+echo -e "${CYAN}  10 domains (Tier 1) | 2 connectors${RESET}"
 echo -e "${CYAN}══════════════════════════════════════════════════════════${RESET}"
 
 # ── Wait for Schema Registry ──────────────────────────────────────────────────
@@ -92,14 +96,13 @@ register_connector() {
 
 register_connector "debezium-postgres-cdc" "${CONNECTORS_DIR}/debezium.json"
 register_connector "sink"                   "${CONNECTORS_DIR}/snowflake_sink.json"
-register_connector "sinkitems"              "${CONNECTORS_DIR}/snowflake_sink_items.json"
 
 # ── Status check ─────────────────────────────────────────────────────────────
 echo -e "\n${YELLOW}⏳  Waiting for connectors to stabilize (15s)...${RESET}"
 sleep 15
 
 echo -e "\n${CYAN}── Connector status ──────────────────────────────────────${RESET}"
-for connector in debezium-postgres-cdc sink sinkitems; do
+for connector in debezium-postgres-cdc sink; do
     STATUS=$(curl -sf "${CONNECT_URL}/connectors/${connector}/status" \
         | python3 -c "import sys,json; print(json.load(sys.stdin)['connector']['state'])" 2>/dev/null || echo "UNKNOWN")
     [ "$STATUS" = "RUNNING" ] \
@@ -108,7 +111,7 @@ for connector in debezium-postgres-cdc sink sinkitems; do
 done
 
 echo -e "\n${CYAN}══════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}  All connectors registered! (20 domains → 3 connectors)${RESET}\n"
+echo -e "${GREEN}  All connectors registered! (10 domains → 2 connectors)${RESET}\n"
 echo -e "  ${GRAY}Kafka UI    →${RESET} http://localhost:8080"
 echo -e "  ${GRAY}Connect     →${RESET} http://localhost:8083/connectors"
 echo -e "  ${GRAY}Registry    →${RESET} http://localhost:8081/subjects"

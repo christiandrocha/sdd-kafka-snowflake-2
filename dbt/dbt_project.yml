@@ -1,0 +1,35 @@
+name: sdd_kafka_snowflake
+version: '2.0.0'
+config-version: 2
+profile: sdd_kafka_snowflake
+
+model-paths:  ["models"]
+test-paths:   ["tests"]
+macro-paths:  ["macros"]
+target-path:  "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Esqueleto: as pastas models/{bronze,silver,gold} existem mas estão vazias.
+# Os 10 models Bronze chegam no build do MIGRACAO_INGESTAO_V4, já escritos
+# sobre colunas tipadas (schematização do conector v4), não sobre
+# RECORD_CONTENT/RECORD_METADATA VARIANT como no projeto anterior.
+models:
+  sdd_kafka_snowflake:
+    bronze:
+      +materialized: incremental
+      +schema: BRONZE
+      +incremental_strategy: merge
+      +on_schema_change: sync_all_columns
+      +tags: ["bronze", "cdc"]
+    silver:
+      +materialized: incremental
+      +schema: SILVER
+      +incremental_strategy: merge
+      +on_schema_change: sync_all_columns
+      +tags: ["silver", "cdc"]
+    gold:
+      +materialized: incremental
+      +schema: GOLD
+      +incremental_strategy: merge
+      +on_schema_change: sync_all_columns
+      +tags: ["gold", "analytics"]

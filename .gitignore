@@ -14,6 +14,20 @@ __pycache__/
 **/__pycache__/
 *.pyc
 
+# Massa de teste — 52 arquivos JSON, ~47 MB, 115.052 registros.
+# Copiada de ../sdd-kafka-snowflake/tests/data, filtrada para os 10 domínios
+# Tier 1. Não versionar: é dado de origem reproduzível, não código.
+tests/data/
+
+# Artefatos gerados do dbt — recriáveis, não versionar.
+# dbt_packages/ vem de `dbt deps` (fixado por package-lock.yml, esse sim versionado)
+dbt/dbt_packages/
+# target/ vem de `dbt parse|run` — manifest.json, SQL compilado, run_results.json
+dbt/target/
+dbt/logs/
+# id anônimo de telemetria, gerado por máquina
+dbt/.user.yml
+
 # Large media — use external storage or LFS, not git
 *.mp4
 *.mov

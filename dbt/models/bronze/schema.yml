@@ -1,0 +1,625 @@
+version: 2
+
+# Bronze -- 10 dominios Tier 1 sobre colunas TIPADAS (conector v4 com
+# snowflake.enable.schematization=true). As colunas de metadados op,
+# source_ts_ms, kafka_offset, kafka_partition e kafka_created_at existem em
+# todos os modelos e sao testadas da mesma forma em cada um.
+
+models:
+  - name: bronze_payment_events
+    description: >
+      Eventos do ciclo de vida do pagamento, um por transicao. Campo `event` chega como VARCHAR (JSONB serializado pelo Debezium) e e expandido em event_name + timestamp normalizado.
+    columns:
+      - name: event_id
+        description: "Identificador unico do evento (UUID)."
+        tests: [unique, not_null]
+
+      - name: payment_id
+        description: "Pagamento a que o evento pertence. Varios eventos compartilham o mesmo payment_id."
+        tests: [not_null]
+
+      - name: event_name
+        description: "Nome do evento no ciclo: created, authorized, captured, succeeded, settled, closed, refunded."
+        tests: [not_null]
+
+      - name: event_timestamp_ms
+        description: "Timestamp do evento em epoch ms. Origem manda int ou float cientifico; CAST via FLOAT cobre os dois."
+        tests: [not_null]
+
+      - name: event_timestamp
+        description: "event_timestamp_ms convertido para TIMESTAMP_NTZ."
+        tests: [not_null]
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem. Auditoria apenas."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_orders
+    description: >
+      Tabela hub do modelo. Liga os demais dominios por chaves de negocio heterogeneas: CPF, CNPJ, driver_id e UUIDs.
+    columns:
+      - name: order_id
+        description: "Identificador do pedido (UUID)."
+        tests: [unique, not_null]
+
+      - name: order_date
+        description: "Data e hora do pedido."
+
+      - name: total_amount
+        description: "Valor total do pedido."
+
+      - name: user_key
+        description: "CPF do usuario. Junta com users_mongo.cpf / users_mssql.cpf."
+        tests: [not_null]
+
+      - name: restaurant_key
+        description: "CNPJ do restaurante. Junta com restaurants.cnpj."
+        tests: [not_null]
+
+      - name: driver_key
+        description: "driver_id do entregador. Junta com drivers.driver_id."
+
+      - name: payment_key
+        description: "UUID do pagamento."
+
+      - name: rating_key
+        description: "UUID da avaliacao. Dominio Tier 2 removido -- coluna orfa, mantida por fidelidade a origem."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_order_items
+    description: >
+      Itens de linha do pedido -- maior volume do projeto. Um conector unico atende este dominio desde o v4 (o buffer client-side que motivava conector separado nao existe mais).
+    columns:
+      - name: order_item_id
+        description: "Identificador do item (UUID)."
+        tests: [unique, not_null]
+
+      - name: order_id
+        description: "Pedido a que o item pertence. Junta com bronze_orders.order_id."
+        tests: [not_null]
+
+      - name: product_id
+        description: "Produto (PRD-XXXXX). O dominio products e Tier 2 -- sem tabela de dimensao correspondente."
+
+      - name: restaurant_id
+        description: "ID numerico do restaurante."
+
+      - name: product_name
+        description: "Nome do produto no momento do pedido."
+
+      - name: product_type
+        description: "Tipo do produto."
+
+      - name: cuisine_type
+        description: "Tipo de cozinha."
+
+      - name: unit_price
+        description: "Preco unitario."
+
+      - name: quantity
+        description: "Quantidade."
+
+      - name: subtotal
+        description: "Subtotal da linha."
+
+      - name: discount_applied
+        description: "Desconto aplicado."
+
+      - name: modifiers
+        description: "Modificadores como string simples."
+
+      - name: is_combo
+        description: "Indicador de combo."
+
+      - name: is_vegetarian
+        description: "Indicador vegetariano."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_driver_shifts
+    description: >
+      Desempenho por turno do entregador: ganhos, distancia, numero de pedidos e avaliacao.
+    columns:
+      - name: shift_id
+        description: "Identificador do turno (UUID)."
+        tests: [unique, not_null]
+
+      - name: driver_id
+        description: "Entregador do turno. Junta com drivers.driver_id."
+        tests: [not_null]
+
+      - name: city
+        description: "Cidade."
+
+      - name: region
+        description: "Regiao."
+
+      - name: shift_type
+        description: "full-time ou part-time."
+
+      - name: login_method
+        description: "Metodo de login."
+
+      - name: device_os
+        description: "Sistema do dispositivo."
+
+      - name: start_time
+        description: "Inicio do turno."
+
+      - name: end_time
+        description: "Fim do turno."
+
+      - name: shift_duration_min
+        description: "Duracao em minutos."
+
+      - name: num_orders
+        description: "Pedidos entregues no turno."
+
+      - name: distance_covered_km
+        description: "Distancia percorrida."
+
+      - name: earnings_brl
+        description: "Ganhos em BRL."
+
+      - name: shift_rating
+        description: "Avaliacao do turno."
+
+      - name: issues_reported
+        description: "Categoria de problema reportado."
+
+      - name: available
+        description: "Disponibilidade."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_search_events
+    description: >
+      Buscas do usuario. Coluna de origem TIMESTAMP renomeada para search_timestamp. Nao ha dt_current_timestamp neste dominio.
+    columns:
+      - name: search_id
+        description: "Identificador da busca (UUID)."
+        tests: [unique, not_null]
+
+      - name: user_id
+        description: "Usuario que buscou (ID numerico, nao CPF)."
+
+      - name: query_text
+        description: "Texto buscado."
+
+      - name: filters
+        description: "Filtros como string simples."
+
+      - name: result_count
+        description: "Numero de resultados."
+
+      - name: clicked_product_id
+        description: "Produto clicado, se houve."
+
+      - name: search_timestamp
+        description: "Momento da busca (coluna TIMESTAMP na origem)."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_recommendations
+    description: >
+      Eventos de recomendacao de ML. Coluna de origem TIMESTAMP renomeada para event_timestamp.
+    columns:
+      - name: event_id
+        description: "Identificador do evento (UUID)."
+        tests: [unique, not_null]
+
+      - name: user_id
+        description: "Usuario alvo da recomendacao."
+
+      - name: product_id
+        description: "Produto recomendado."
+
+      - name: event_type
+        description: "view, click, purchase ou dismiss."
+        tests: [not_null]
+
+      - name: event_timestamp
+        description: "Momento do evento (coluna TIMESTAMP na origem)."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_users_mongo
+    description: >
+      Usuarios vindos do MongoDB. O CPF e a chave de negocio usada em orders.user_key.
+    columns:
+      - name: uuid
+        description: "Identificador do registro (UUID)."
+        tests: [unique, not_null]
+
+      - name: user_id
+        description: "ID numerico do usuario."
+
+      - name: cpf
+        description: "CPF -- junta com orders.user_key."
+        tests: [not_null]
+
+      - name: email
+        description: "E-mail."
+
+      - name: phone_number
+        description: "Telefone."
+
+      - name: city
+        description: "Cidade."
+
+      - name: country
+        description: "Pais."
+
+      - name: delivery_address
+        description: "Endereco de entrega."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_users_mssql
+    description: >
+      Perfil estendido do usuario vindo do MSSQL. Mesmo CPF do users_mongo -- os dois se complementam.
+    columns:
+      - name: uuid
+        description: "Identificador do registro (UUID)."
+        tests: [unique, not_null]
+
+      - name: user_id
+        description: "ID numerico do usuario."
+
+      - name: cpf
+        description: "CPF -- junta com users_mongo.cpf e orders.user_key."
+        tests: [not_null]
+
+      - name: first_name
+        description: "Nome."
+
+      - name: last_name
+        description: "Sobrenome."
+
+      - name: phone_number
+        description: "Telefone."
+
+      - name: birthday
+        description: "Data de nascimento."
+
+      - name: job
+        description: "Profissao."
+
+      - name: company_name
+        description: "Empresa."
+
+      - name: country
+        description: "Pais."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_restaurants
+    description: >
+      Restaurantes vindos do MySQL. O CNPJ e a chave de negocio usada em orders.restaurant_key.
+    columns:
+      - name: uuid
+        description: "Identificador do registro (UUID)."
+        tests: [unique, not_null]
+
+      - name: restaurant_id
+        description: "ID numerico do restaurante. Junta com order_items.restaurant_id."
+
+      - name: cnpj
+        description: "CNPJ -- junta com orders.restaurant_key."
+        tests: [not_null]
+
+      - name: name
+        description: "Nome do restaurante."
+
+      - name: address
+        description: "Endereco."
+
+      - name: city
+        description: "Cidade."
+
+      - name: country
+        description: "Pais."
+
+      - name: phone_number
+        description: "Telefone."
+
+      - name: cuisine_type
+        description: "Tipo de cozinha."
+
+      - name: opening_time
+        description: "Horario de abertura."
+
+      - name: closing_time
+        description: "Horario de fechamento."
+
+      - name: average_rating
+        description: "Nota media."
+
+      - name: num_reviews
+        description: "Numero de avaliacoes."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
+  - name: bronze_drivers
+    description: >
+      Entregadores vindos do PostgreSQL. driver_id e a chave de negocio usada em orders.driver_key e driver_shifts.driver_id.
+    columns:
+      - name: uuid
+        description: "Identificador do registro (UUID)."
+        tests: [unique, not_null]
+
+      - name: driver_id
+        description: "driver_id -- junta com orders.driver_key e driver_shifts.driver_id."
+        tests: [not_null]
+
+      - name: first_name
+        description: "Nome."
+
+      - name: last_name
+        description: "Sobrenome."
+
+      - name: phone_number
+        description: "Telefone."
+
+      - name: city
+        description: "Cidade."
+
+      - name: country
+        description: "Pais."
+
+      - name: date_birth
+        description: "Data de nascimento."
+
+      - name: license_number
+        description: "Numero da habilitacao."
+
+      - name: vehicle_type
+        description: "Tipo de veiculo."
+
+      - name: vehicle_make
+        description: "Marca."
+
+      - name: vehicle_model
+        description: "Modelo."
+
+      - name: vehicle_year
+        description: "Ano."
+
+      - name: dt_current_timestamp
+        description: "Timestamp de processamento da origem."
+
+      - name: op
+        description: "Operacao CDC do Debezium (c=insert, u=update, d=delete, r=snapshot)."
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['c', 'u', 'd', 'r']
+
+      - name: source_ts_ms
+        description: "Epoch ms do commit no Postgres (source.ts_ms do Debezium)."
+        tests: [not_null]
+
+      - name: kafka_offset
+        description: "Offset da mensagem no topico. Desempate na deduplicacao."
+        tests: [not_null]
+
+      - name: kafka_partition
+        description: "Particao Kafka de origem."
+
+      - name: kafka_created_at
+        description: >
+          RECORD_METADATA:CreateTime (epoch ms). Watermark do modo
+          incremental -- so entram linhas acima do MAX ja materializado.
+        tests: [not_null]
