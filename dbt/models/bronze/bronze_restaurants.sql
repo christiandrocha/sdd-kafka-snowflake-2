@@ -42,8 +42,15 @@ WITH source AS (
 
     FROM {{ source('bronze_raw', 'RESTAURANTS') }}
 
+    -- Descarta o tombstone do Kafka: `drop.tombstones=false` no Debezium faz
+    -- todo DELETE emitir, depois da linha `__OP='d'`, uma mensagem de valor
+    -- nulo que o sink materializa como linha inteiramente nula. Sem este
+    -- filtro ela entra aqui, e como o MERGE por UUID nunca casa com
+    -- chave nula, cada DELETE deixa uma linha-lixo permanente na Bronze.
+    WHERE UUID IS NOT NULL
+
     {% if is_incremental() %}
-    WHERE RECORD_METADATA:CreateTime::BIGINT > (
+      AND RECORD_METADATA:CreateTime::BIGINT > (
         SELECT COALESCE(MAX(kafka_created_at), 0) FROM {{ this }}
     )
     {% endif %}
