@@ -1,37 +1,39 @@
 # sdd-kafka-snowflake
 
-Pipeline de **Change Data Capture** de ponta a ponta: PostgreSQL → Debezium → Kafka → Snowflake, com modelagem em camadas via dbt, orquestração por Dagster e observabilidade em Prometheus + Grafana.
+End-to-end **Change Data Capture** pipeline: PostgreSQL → Debezium → Kafka → Snowflake, with layered dbt modeling, Dagster orchestration, and observability through Prometheus + Grafana.
 
-O diferencial do projeto não é a stack — é o **controle**: a estratégia de CDC de cada domínio vive numa tabela de metadados no Snowflake, não no SQL; o disparo do pipeline passa por um gate que consulta o Kafka antes de acordar o warehouse; e as invariantes de cada camada são testadas, com severidade escolhida caso a caso.
+What sets this project apart is not the stack — it is the **control**. Each domain's CDC strategy lives in a metadata table in Snowflake rather than in SQL; pipeline triggering passes through a gate that queries Kafka before waking the warehouse; and every layer's invariants are tested, with severity chosen case by case.
+
+> Source code comments and commit messages are written in Portuguese. This README is in English.
 
 ---
 
 ## Status
 
-| Componente | Estado | Última verificação |
+| Component | State | Last verified |
 |---|---|---|
-| Ingestão CDC (Debezium → Kafka → Snowflake Sink) | Operando | 2026-08-10 |
-| Camada Bronze (10 modelos dbt) | Materializada | 2026-08-10 |
-| Camada Silver (10 modelos dbt) | Materializada | 2026-08-10 |
-| Camada Gold | Não implementada | — |
-| Testes dbt (155) | 0 erros, 8 avisos | 2026-08-10 |
-| CI/CD (`.github/workflows/deploy.yml`) | Nunca executado | — |
+| CDC ingestion (Debezium → Kafka → Snowflake Sink) | Operational | 2026-08-10 |
+| Bronze layer (10 dbt models) | Materialized | 2026-08-10 |
+| Silver layer (10 dbt models) | Materialized | 2026-08-10 |
+| Gold layer (6 dbt models) | Materialized | 2026-08-10 |
+| dbt tests (185) | 0 errors, 10 warnings | 2026-08-10 |
+| CI/CD (`.github/workflows/deploy.yml`) | Never executed | — |
 
-Os 8 avisos são de integridade referencial e foram rastreados até a base de origem — ver [Qualidade de dados](#qualidade-de-dados).
+All 10 warnings are referential-integrity checks traced back to the source database — see [Data quality](#data-quality).
 
 ---
 
-## Arquitetura
+## Architecture
 
 ```
 ┌──────────────┐    WAL     ┌──────────────┐          ┌──────────────────┐
 │  PostgreSQL  │──────────► │   Debezium   │────────► │      Kafka       │
-│   (origem)   │            │    source    │          │  10 tópicos CDC  │
+│   (source)   │            │    source    │          │  10 CDC topics   │
 └──────────────┘            └──────────────┘          └────────┬─────────┘
                                                                │
                                           ┌────────────────────┴────────┐
                                           │      Schema Registry        │
-                                          │  (contratos + schematização)│
+                                          │  (contracts + schematization)│
                                           └────────────────────┬────────┘
                                                                │
                                               ┌────────────────▼─────────────┐
@@ -43,166 +45,189 @@ Os 8 avisos são de integridade referencial e foram rastreados até a base de or
 │  Snowflake · CDC_POC                                                       │
 │                                                                            │
 │   BRONZE ──────────────► SILVER ──────────────► GOLD                       │
-│   append CDC bruto       estado atual          agregações                  │
-│   (incremental/merge)    (resolve_cdc)         (não implementada)          │
+│   raw append-only CDC    current entity state   6 aggregations             │
+│   (incremental/merge)    (resolve_cdc)          (payments, drivers,        │
+│                                                  restaurants, users)       │
 │                                                                            │
-│   CONFIG.TABLE_METADATA ── estratégia de CDC por domínio ───────┘          │
+│   CONFIG.TABLE_METADATA ── per-domain CDC strategy ─────────────┘          │
 └────────────────────────────────────────────────────────────────────────────┘
               ▲                                            ▲
-              │ orquestração                               │ métricas
+              │ orchestration                              │ metrics
       ┌───────┴────────┐                          ┌────────┴─────────┐
-      │    Dagster     │◄─── gate de custo ───────│    Prometheus    │◄── JMX +
-      │ sensors + jobs │     (checa Kafka)        │     Grafana      │  Kafka Exporter
+      │    Dagster     │◄─── cost gate ───────────│    Prometheus    │◄── JMX +
+      │ sensors + jobs │     (checks Kafka)       │     Grafana      │  Kafka Exporter
       └────────────────┘                          └──────────────────┘
 ```
 
-### Domínios
+### Domains
 
-Dez tabelas atravessam o pipeline inteiro, do Postgres ao Silver:
+Ten tables travel the full pipeline, from Postgres to Gold:
 
-| Domínio | Tipo | Chave | Papel |
+| Domain | Type | Key | Role |
 |---|---|---|---|
-| `orders` | entity | `order_id` | Hub — liga os demais por CPF, CNPJ e `driver_id` |
-| `order_items` | fact | `order_item_id` | Maior volume (210 mil linhas) |
-| `payment_events` | fact | `event_id` | Ciclo de vida do pagamento (event sourcing) |
-| `users_mongo` | entity | `uuid` | Usuários (origem MongoDB); junta por CPF |
-| `users_mssql` | entity | `uuid` | Perfil estendido (origem MSSQL); mesmo CPF |
-| `restaurants` | entity | `uuid` | Junta com `orders` por CNPJ |
-| `drivers` | entity | `uuid` | Junta por `driver_id` |
-| `driver_shifts` | entity | `shift_id` | Turnos do entregador |
-| `search_events` | log | `search_id` | Buscas do usuário |
-| `recommendations` | log | `event_id` | Eventos de recomendação de ML |
+| `orders` | entity | `order_id` | Hub — links the others by CPF, CNPJ and `driver_id` |
+| `order_items` | fact | `order_item_id` | Largest volume (210k rows) |
+| `payment_events` | fact | `event_id` | Payment lifecycle (event sourcing) |
+| `users_mongo` | entity | `uuid` | Users (MongoDB origin); joins on CPF |
+| `users_mssql` | entity | `uuid` | Extended profile (MSSQL origin); same CPF |
+| `restaurants` | entity | `uuid` | Joins to `orders` on CNPJ |
+| `drivers` | entity | `uuid` | Joins on `driver_id` |
+| `driver_shifts` | entity | `shift_id` | Driver shifts |
+| `search_events` | log | `search_id` | User searches |
+| `recommendations` | log | `event_id` | ML recommendation events |
 
 ---
 
-## Modelagem em camadas
+## Layered modeling
 
-### Bronze — o CDC bruto, idempotente
+### Bronze — raw CDC, idempotent
 
-Um modelo por domínio, `incremental` com `merge`. As colunas chegam **tipadas e em maiúsculo** (o sink roda com `snowflake.enable.schematization=true`), então não há extração de VARIANT. Cada modelo:
+One model per domain, `incremental` with `merge`. Columns arrive **typed and uppercased** (the sink runs with `snowflake.enable.schematization=true`), so there is no VARIANT extraction. Each model:
 
-- deduplica por chave dentro do lote, ordenando por `source_ts_ms DESC, kafka_offset DESC`;
-- usa `RECORD_METADATA:CreateTime` como watermark incremental;
-- **descarta o tombstone do Kafka.** O conector roda com `drop.tombstones=false`, então todo DELETE emite duas mensagens: a linha com `__OP='d'` e, em seguida, uma de valor nulo que o sink materializa como linha inteiramente nula. Sem o filtro `WHERE <chave> IS NOT NULL`, o MERGE nunca casa com chave nula e cada DELETE deixa lixo permanente.
+- deduplicates by key within the batch, ordering by `source_ts_ms DESC, kafka_offset DESC`;
+- uses `RECORD_METADATA:CreateTime` as the incremental watermark;
+- **discards the Kafka tombstone.** The connector runs with `drop.tombstones=false`, so every DELETE emits two messages: the row carrying `__OP='d'`, and then a null-valued one that the sink materializes as an entirely null row. Without the `WHERE <key> IS NOT NULL` filter, the MERGE never matches on a null key and each DELETE leaves permanent garbage behind.
 
-Colunas de controle preservadas em todas as camadas: `op`, `source_ts_ms`, `kafka_offset`, `kafka_partition`, `kafka_created_at` — são a linhagem que liga cada linha ao evento Kafka que a produziu.
+Control columns preserved across every layer: `op`, `source_ts_ms`, `kafka_offset`, `kafka_partition`, `kafka_created_at` — the lineage tying each row to the Kafka event that produced it.
 
-### Silver — o estado atual, dirigido por metadados
+### Silver — current state, metadata-driven
 
-Nenhum modelo Silver contém lógica de CDC. Todos têm a mesma forma:
+No Silver model contains CDC logic. They all have the same shape:
 
 ```sql
 {{ resolve_cdc(ref('bronze_orders')) }}
 ```
 
-A macro [`resolve_cdc`](dbt/macros/resolve_cdc.sql) lê a estratégia do domínio em `CONFIG.TABLE_METADATA` e resolve o histórico:
+The [`resolve_cdc`](dbt/macros/resolve_cdc.sql) macro reads the domain's strategy from `CONFIG.TABLE_METADATA` and resolves history accordingly:
 
-| Estratégia | Comportamento |
+| Strategy | Behavior |
 |---|---|
-| `upsert` | Uma linha por chave, a versão mais recente; DELETE é descartado |
-| `append` | Sem deduplicação; só DELETE sai |
-| `log` | Nada é descartado, DELETE inclusive — registro histórico |
+| `upsert` | One row per key, most recent version; DELETE is discarded |
+| `append` | No deduplication; only DELETE is removed |
+| `log` | Nothing is discarded, DELETE included — historical record |
 
-Trocar a estratégia de um domínio é um `UPDATE` na tabela de metadados, não um deploy de SQL.
+Changing a domain's strategy is an `UPDATE` on the metadata table, not a SQL deploy.
 
-Três decisões que valem a leitura antes de mexer:
+Three decisions worth reading before touching this:
 
-- **Desempate por `kafka_offset`.** Ordenar só por `source_ts_ms` (milissegundos) empata em UPDATE em cascata e carga em lote, e o `ROW_NUMBER` passa a escolher de forma não determinística — o mesmo `dbt run` produzindo Silver diferente.
-- **`op IS DISTINCT FROM 'd'`, não `op != 'd'`.** Em SQL, `NULL != 'd'` é NULL, não TRUE: o filtro ingênuo descartava em silêncio toda linha com `op` nulo.
-- **`materialized='table'`, não `incremental`.** MERGE não apaga linha. Num incremental, uma chave deletada na origem sobreviveria para sempre na Silver; com rebuild, ela simplesmente não reaparece. O custo é varrer a Bronze a cada execução — barato no volume atual, e a saída, se crescer, é `delete+insert` particionado, não `merge`.
+- **Tie-breaking on `kafka_offset`.** Ordering by `source_ts_ms` alone (milliseconds) ties on cascading updates and batch loads, making `ROW_NUMBER` non-deterministic — the same `dbt run` could produce a different Silver.
+- **`op IS DISTINCT FROM 'd'`, not `op != 'd'`.** In SQL, `NULL != 'd'` is NULL, not TRUE: the naive filter silently dropped every row with a null `op`.
+- **`materialized='table'`, not `incremental`.** MERGE does not delete rows. In an incremental model a key deleted at the source would survive in Silver forever; with a rebuild it simply stops appearing. The cost is scanning Bronze on every run — cheap at current volume, and if it grows the answer is partitioned `delete+insert`, not `merge`.
 
-A macro [`get_table_config`](dbt/macros/get_table_config.sql) carrega os metadados com um fallback estático, porque o entrypoint do Dagster roda `dbt parse` offline: sem conexão, `execute` é falso e a chave do `config()` sairia vazia no manifest.
+The [`get_table_config`](dbt/macros/get_table_config.sql) macro loads the metadata with a static fallback, because the Dagster entrypoint runs `dbt parse` offline: without a connection, `execute` is false and the `config()` key would come out empty in the manifest.
 
-### Gold
+### Gold — six aggregations
 
-Não implementada. A pasta existe e o `dbt_project.yml` já a configura.
+Each Gold model has its **own grain**, and the grain is the thing worth protecting: it is what breaks silently when someone removes a guard clause.
+
+| Model | Materialization | Grain | Aggregation pattern |
+|---|---|---|---|
+| `gold_payment_lifecycle` | incremental | `payment_id` | Additive-partitionable — reference pattern |
+| `gold_payments_by_status` | incremental | `event_name` | Global ratio, low cardinality |
+| `gold_payment_funnel` | table | funnel stage | Global ratio |
+| `gold_driver_performance` | table | `driver_id` | Additive-partitionable |
+| `gold_revenue_per_restaurant` | table | `restaurant_id` | Additive-partitionable |
+| `gold_user_behavior` | table | `cpf` | Additive-partitionable, cumulative |
+
+**The incremental pattern.** In `gold_payment_lifecycle` the watermark identifies *which* payments changed — it does not filter the rows that feed the aggregation. Once the affected `payment_id` values are known, the full history of each is re-read. Otherwise a lone `closed` event would produce a row with no `created_at`, and the MERGE would overwrite the good version with a mutilated one.
+
+**Fan-out defenses.** `silver_drivers`, `silver_restaurants` and `silver_users_mongo` guarantee uniqueness on the **technical** key (`uuid`), not on the **business** key used in joins (`driver_id`, `restaurant_id`, `cpf`). In this dataset 95 CPFs have more than one registration. Left untreated, every order would be counted twice and `gasto_total` would inflate up to 2×. The three affected models collapse the dimension to one row per business key with `QUALIFY`, using the same deterministic criterion as `resolve_cdc`, and the `unique` test on the grain exists as the guard for that decision.
+
+In `gold_user_behavior` the `cpf → user_id` bridge is deliberately **not** deduplicated — only the descriptive attributes are. Searches and recommendations belonging to a CPF's secondary `user_id` values still get counted.
+
+**Orphans are flagged, not dropped.** Every fact-to-dimension join is a LEFT JOIN starting from the fact, with a `sem_cadastro` flag. An INNER JOIN would erase 55 drivers and 27 restaurants from the report without a trace.
 
 ---
 
-## Governança de custo
+## Cost governance
 
-O warehouse é o item caro da conta, e o pipeline foi desenhado para não acordá-lo à toa.
+The warehouse is the expensive part of the account, and the pipeline is designed not to wake it without reason.
 
-Os dois sensores do Dagster (`bronze_new_data_sensor` e `registry_new_subject_sensor`, intervalo de 60s) **consultam o Prometheus antes do Snowflake**. Sem tráfego novo no Kafka, o sensor pula sem abrir conexão:
+Both Dagster sensors (`bronze_new_data_sensor` and `registry_new_subject_sensor`, 60-second interval) **query Prometheus before Snowflake**. With no new Kafka traffic, the sensor skips without opening a connection:
 
 ```
 Sensor bronze_new_data_sensor skipped: Sem atividade no Kafka (via Prometheus) — Snowflake não consultado.
 ```
 
-Em repouso, o custo do pipeline ligado é zero crédito. Complementam o desenho um Resource Monitor na conta e Time Travel de 1 dia nas tabelas Bronze — auditáveis por `scripts/verify_governance.sql`.
+At rest, running this pipeline costs zero credits. The design is completed by an account Resource Monitor and 1-day Time Travel on Bronze tables — both auditable through `scripts/verify_governance.sql`.
 
 ---
 
-## Qualidade de dados
+## Data quality
 
-155 testes dbt: 83 na Bronze, 72 na Silver.
+185 dbt tests: 83 in Bronze, 72 in Silver, 30 in Gold.
 
-A Silver testa o que a Bronze não tem como garantir — as invariantes que a resolução de CDC adiciona:
+Silver tests what Bronze cannot guarantee — the invariants CDC resolution adds:
 
-1. **`unique` + `not_null` na chave.** Na Bronze o `unique` passa pela deduplicação por lote; na Silver ele vale sobre o histórico inteiro.
-2. **`accepted_values` em `op` sem o `'d'`.** É o teste do filtro de delete. Se a estratégia de um domínio virar `log`, este teste quebra de propósito.
-3. **`not_null` nas colunas de ordenação** (`source_ts_ms`, `kafka_offset`) — nulo ali significa desempate não determinístico de volta.
+1. **`unique` + `not_null` on the key.** In Bronze, `unique` passes thanks to per-batch deduplication; in Silver it holds across the entire history.
+2. **`accepted_values` on `op` without `'d'`.** This is the test of the delete filter. If a domain's strategy switches to `log`, this test breaks on purpose.
+3. **`not_null` on the ordering columns** (`source_ts_ms`, `kafka_offset`) — a null there means non-deterministic tie-breaking is back.
 
-### Convenção de severidade
+Gold tests the **grain** of each model, in `error` severity. That is the only test that catches fan-out returning if a `QUALIFY` is removed.
 
-| Severidade | Quando | Exemplo |
+### Severity convention
+
+| Severity | When | Example |
 |---|---|---|
-| `error` | Invariante garantida pelo código deste repositório | `unique` na chave da entidade |
-| `warn` | Integridade referencial entre domínios | `order_items.order_id → orders` |
+| `error` | Invariant guaranteed by this repository's code | `unique` on an entity key or model grain |
+| `warn` | Referential integrity across domains | `order_items.order_id → orders` |
 
-O motivo do `warn` é concreto: os dez fluxos CDC são independentes e têm tempos de snapshot próprios. Um pedido chegar antes do entregador dele é latência normal, não defeito — derrubar o pipeline por isso seria falso positivo.
+The reason for `warn` is concrete: the ten CDC streams are independent and have their own snapshot timing. An order arriving before its driver is normal latency, not a defect — failing the pipeline over it would be a false positive.
 
-### Achados em aberto (2026-08-10)
+### Open findings (2026-08-10)
 
-Os avisos foram rastreados até a origem, e **nenhum é defeito do pipeline**:
+Warnings were traced back to the source, and **none is a pipeline defect**:
 
-| Achado | Medida | Verificação na origem |
+| Finding | Measurement | Source verification |
 |---|---|---|
-| 7.246 linhas de `order_items` sem pedido correspondente (85 `order_id` distintos) | Nenhum desses IDs existe em `bronze_orders` — não é efeito do filtro de delete | O Postgres fonte tem exatamente os mesmos 7.246: `order_items` referencia 491 pedidos, e a tabela `orders` só tem 414. A base semeada não tem FK |
-| 95 CPFs duplicados em `users_mongo` | `uuid` é único, mas a mesma pessoa aparece com vários | A origem tem 412 usuários para 216 CPFs distintos. Junção por CPF sofre fan-out — considerar ao modelar a Gold |
+| 7,246 `order_items` rows with no matching order (85 distinct `order_id`) | None of those IDs exists in `bronze_orders` — not an effect of the delete filter | Source Postgres has exactly the same 7,246: `order_items` references 491 orders while the `orders` table holds only 414. The seeded database has no foreign key |
+| 95 duplicate CPFs in `users_mongo` | `uuid` is unique, but the same person appears under several | The source holds 412 users across 216 distinct CPFs. Handled in Gold by collapsing the dimension before joining |
+| `payment_id` cardinality is degenerate | 2,210 events spread over 8 distinct `payment_id`, with **zero** overlap against `orders.payment_key` | Property of the synthetic generator. The three payment models are structurally correct, but their numbers carry no business meaning on this dataset |
+| `gold_user_behavior` covers 295 of 414 orders | The 119 missing ones are exactly the orphans of `orders.user_key → users_mongo.cpf` | Orders whose CPF has no user record; `gasto_total` is revenue attributable to a known user, not total revenue |
 
-A Silver reproduz a origem linha a linha: 414 pedidos, 210.002 itens, os mesmos 7.246 órfãos.
+Silver reproduces the source row for row: 414 orders, 210,002 items, the same 7,246 orphans.
 
 ---
 
-## Estrutura
+## Repository layout
 
 ```
-connectors/           Debezium source + Snowflake sink (JSON de configuração)
-dagster/pipeline/     assets (dbt), jobs, sensors com gate de custo, resources
+connectors/           Debezium source + Snowflake sink (JSON configuration)
+dagster/pipeline/     dbt assets, jobs, cost-gated sensors, resources
 dbt/
   macros/             resolve_cdc, get_table_config, generate_schema_name
-  models/bronze/      10 modelos incrementais + schema.yml (83 testes)
-  models/silver/      10 modelos via resolve_cdc + schema.yml (72 testes)
+  models/bronze/      10 incremental models + schema.yml (83 tests)
+  models/silver/      10 models via resolve_cdc + schema.yml (72 tests)
+  models/gold/        6 aggregations + schema.yml (30 tests)
   models/config/      sources.yml
-observability/        Prometheus (scrape + alertas), JMX exporter
-scripts/              bootstrap do schema CONFIG, streams/tasks, roles, governança
-tests/                gerador de carga para o Postgres fonte
-.claude/sdd/          registro do fluxo de especificação (define → design → build → ship)
+observability/        Prometheus (scrape + alerts), JMX exporter
+scripts/              CONFIG schema bootstrap, streams/tasks, roles, governance
+tests/                load generator for the source Postgres
+.claude/sdd/          specification workflow records (define → design → build → ship)
 ```
 
 ---
 
-## Como rodar
+## Running it
 
-### Pré-requisitos
+### Prerequisites
 
-- Docker e Docker Compose
-- Conta Snowflake com autenticação por par de chaves RSA
-- `keys/` com a chave privada `.p8` (fora do versionamento)
+- Docker and Docker Compose
+- A Snowflake account with RSA key-pair authentication
+- `keys/` holding the private `.p8` key (outside version control)
 
-### Configuração
+### Configuration
 
-Crie um `.env` na raiz — ignorado pelo git, nunca commitado:
+Create a `.env` at the repository root — it is gitignored and must never be committed:
 
 ```bash
-# PostgreSQL fonte
+# Source PostgreSQL
 POSTGRES_USER=
 POSTGRES_PASSWORD=
 POSTGRES_DB=
 DATABASE_URL=
 
-# Snowflake (par de chaves)
+# Snowflake (key pair)
 SNOWFLAKE_ACCOUNT=
 SNOWFLAKE_USER=
 SNOWFLAKE_PRIVATE_KEY_PATH=
@@ -217,100 +242,100 @@ SCHEMA_REGISTRY_URL=
 # dbt
 DBT_TARGET=dev
 
-# Storage do Dagster
+# Dagster storage
 DAGSTER_PG_DB=
 DAGSTER_PG_USER=
 DAGSTER_PG_PASSWORD=
 ```
 
-### Subida
+### Bring the stack up
 
 ```bash
 docker compose up -d --build
 
-# aguarde o Kafka Connect responder
+# wait for Kafka Connect to respond
 curl -sf http://localhost:8083/connectors
 
-# registre os conectores
+# register the connectors
 ./scripts/register_connectors.sh
 ```
 
-Antes da primeira execução do dbt, rode os scripts Snowflake na ordem: `bootstrap_config.sql` (cria o schema `CONFIG`) e depois `streams_and_tasks.sql`.
+Before the first dbt execution, run the Snowflake scripts in order: `bootstrap_config.sql` (creates the `CONFIG` schema), then `streams_and_tasks.sql`.
 
 ### dbt
 
-O dbt vive dentro do container do Dagster, com o projeto montado por bind:
+dbt lives inside the Dagster container, with the project bind-mounted:
 
 ```bash
-# validação offline — não abre conexão com o warehouse
+# offline validation — opens no warehouse connection
 docker compose exec dagster-daemon \
   bash -c "cd /opt/dagster/dbt && dbt parse --target dev"
 
-# materialização e testes
+# materialization and tests
 docker compose exec dagster-daemon \
-  bash -c "cd /opt/dagster/dbt && dbt run  --select silver --target dev"
+  bash -c "cd /opt/dagster/dbt && dbt run  --select silver gold --target dev"
 docker compose exec dagster-daemon \
-  bash -c "cd /opt/dagster/dbt && dbt test --select silver --target dev"
+  bash -c "cd /opt/dagster/dbt && dbt test --select silver gold --target dev"
 ```
 
-Se o `dagster-daemon` estiver em loop de restart (por exemplo, com o `dagster-postgres` fora do ar), cada `exec` morre junto com o container. Use um container descartável, imune ao loop:
+If `dagster-daemon` is stuck in a restart loop (for instance with `dagster-postgres` down), every `exec` dies along with the container. Use a throwaway container instead, immune to the loop:
 
 ```bash
 docker compose run --rm --no-deps --entrypoint bash dagster-daemon \
-  -c "cd /opt/dagster/dbt && dbt test --select silver --target dev"
+  -c "cd /opt/dagster/dbt && dbt test --select gold --target dev"
 ```
 
-### Serviços
+### Services
 
-| Serviço | Porta | Papel |
+| Service | Port | Role |
 |---|---|---|
-| `zookeeper` | 2181 | Coordenação do Kafka |
+| `zookeeper` | 2181 | Kafka coordination |
 | `kafka` | 9092 | Broker |
-| `schema-registry` | 8081 | Contratos e schematização |
-| `postgres` | 5432 | Banco fonte do CDC |
-| `dagster-postgres` | — | Storage do Dagster, separado da fonte |
+| `schema-registry` | 8081 | Contracts and schematization |
+| `postgres` | 5432 | CDC source database |
+| `dagster-postgres` | — | Dagster storage, separate from the source |
 | `kafka-connect` | 8083 | Debezium source + Snowflake sink |
 | `dagster` | 3000 | Webserver |
-| `dagster-daemon` | — | Schedules e sensores |
-| `kafka-ui` | 8080 | Inspeção de tópicos |
-| `jmx-exporter` / `kafka-exporter` | — | Métricas do broker |
-| `prometheus` | 9090 | Coleta e alertas |
+| `dagster-daemon` | — | Schedules and sensors |
+| `kafka-ui` | 8080 | Topic inspection |
+| `jmx-exporter` / `kafka-exporter` | — | Broker metrics |
+| `prometheus` | 9090 | Scraping and alerts |
 | `grafana` | 3001 | Dashboards |
 
 ---
 
-## Scripts Snowflake
+## Snowflake scripts
 
-Rodados manualmente via SnowSQL ou worksheet — **não** automatizados, porque mudanças de governança de conta exigem `ACCOUNTADMIN` e revisão humana:
+Run manually through SnowSQL or a worksheet — deliberately **not** automated, because account-governance changes require `ACCOUNTADMIN` and human review:
 
-| Script | Função |
+| Script | Purpose |
 |---|---|
-| `scripts/bootstrap_config.sql` | Cria o schema `CONFIG` e semeia `TABLE_METADATA` |
-| `scripts/streams_and_tasks.sql` | Streams e Tasks que alimentam os sensores |
-| `scripts/create_readonly_role.sql` | Role de leitura para ferramentas externas |
-| `scripts/verify_governance.sql` | Auditoria de Resource Monitor, Time Travel e consumo |
-| `scripts/sync_metadata.py` | Sincroniza Schema Registry → `TABLE_METADATA` |
-| `scripts/init.sql` | Inicialização do Postgres fonte |
+| `scripts/bootstrap_config.sql` | Creates the `CONFIG` schema and seeds `TABLE_METADATA` |
+| `scripts/streams_and_tasks.sql` | Streams and Tasks feeding the sensors |
+| `scripts/create_readonly_role.sql` | Read-only role for external tooling |
+| `scripts/verify_governance.sql` | Audits Resource Monitor, Time Travel and consumption |
+| `scripts/sync_metadata.py` | Syncs Schema Registry → `TABLE_METADATA` |
+| `scripts/init.sql` | Source Postgres initialization |
 
 ---
 
-## Segurança
+## Security
 
-- `.env`, `keys/`, `*.p8`, `*.key` e `*.pem` são ignorados pelo git.
-- A autenticação com o Snowflake é por par de chaves RSA; a chave privada é montada por volume, nunca embutida na imagem.
-- Identidades de serviço separadas por função (o Dagster usa a sua, com `CDC_ROLE`), e uma role somente-leitura para ferramentas de consulta.
-- O Grafana sobe com credenciais padrão (`admin`/`admin`) — troque antes de qualquer exposição fora de `localhost`.
+- `.env`, `keys/`, `*.p8`, `*.key` and `*.pem` are gitignored.
+- Snowflake authentication uses an RSA key pair; the private key is mounted as a volume, never baked into an image.
+- Service identities are separated by function (Dagster has its own, running as `CDC_ROLE`), plus a read-only role for query tooling.
+- Grafana starts with default credentials (`admin`/`admin`) — change them before exposing anything beyond `localhost`.
 
 ---
 
 ## CI/CD
 
-`.github/workflows/deploy.yml` dispara em push para `main` quando `connectors/`, `dbt/` ou os arquivos de compose mudam, e monta o `.env` a partir dos GitHub Secrets.
+`.github/workflows/deploy.yml` triggers on pushes to `main` that touch `connectors/`, `dbt/` or the compose files, and assembles `.env` from GitHub Secrets.
 
-**Nunca foi executado contra um ambiente real.** Antes do primeiro uso, note que ele ainda referencia dois arquivos ausentes do repositório: `docker-compose.prod.yml` e `scripts/snowflake_setup.sql`.
+**It has never run against a real environment.** Before first use, note that it still references two files absent from the repository: `docker-compose.prod.yml` and `scripts/snowflake_setup.sql`.
 
 ---
 
-## Fluxo de trabalho
+## Workflow
 
-O repositório usa um fluxo de especificação em cinco fases — brainstorm, define, design, build, ship — com os artefatos versionados em `.claude/sdd/`. Cada feature entregue deixa o `DEFINE`, o `DESIGN`, o relatório de build e o registro de encerramento, o que torna as decisões de arquitetura rastreáveis muito depois do merge.
+The repository follows a five-phase specification workflow — brainstorm, define, design, build, ship — with artifacts versioned under `.claude/sdd/`. Every delivered feature leaves behind its `DEFINE`, its `DESIGN`, a build report and a closing record, which keeps architectural decisions traceable long after the merge.
