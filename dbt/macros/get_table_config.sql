@@ -49,8 +49,8 @@
 
 {% set static_fallback = {
     'payment_events':  {'table_type': 'fact',   'cdc_strategy': 'upsert', 'unique_key': 'event_id',      'active': true},
-    'search_events':   {'table_type': 'log',    'cdc_strategy': 'upsert', 'unique_key': 'search_id',     'active': true},
-    'recommendations': {'table_type': 'log',    'cdc_strategy': 'upsert', 'unique_key': 'event_id',      'active': true},
+    'search_events':   {'table_type': 'fact',   'cdc_strategy': 'upsert', 'unique_key': 'search_id',     'active': true},
+    'recommendations': {'table_type': 'fact',   'cdc_strategy': 'upsert', 'unique_key': 'event_id',      'active': true},
     'orders':          {'table_type': 'entity', 'cdc_strategy': 'upsert', 'unique_key': 'order_id',      'active': true},
     'driver_shifts':   {'table_type': 'entity', 'cdc_strategy': 'upsert', 'unique_key': 'shift_id',      'active': true},
     'users_mongo':     {'table_type': 'entity', 'cdc_strategy': 'upsert', 'unique_key': 'uuid',          'active': true},
