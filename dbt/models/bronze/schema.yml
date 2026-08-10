@@ -331,7 +331,7 @@ models:
         description: "Produto recomendado."
 
       - name: event_type
-        description: "view, click, purchase ou dismiss."
+        description: "Tipos observados nos dados em 2026-08-10: recommendation_served, add_to_cart, click, view."
         tests: [not_null]
 
       - name: event_timestamp

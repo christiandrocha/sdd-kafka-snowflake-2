@@ -192,10 +192,15 @@ models:
         tests: [unique, not_null]
 
       - name: event_type
-        description: "Tipo do evento de recomendacao."
+        description: >
+          Tipo do evento de recomendacao. Vocabulario levantado dos dados em 2026-08-10, nao de documentacao: SELECT event_type, COUNT(*) GROUP BY 1 sobre as 255 linhas materializadas devolveu recommendation_served (78), add_to_cart (63), click (61), view (53). A lista anterior aqui -- view, click, purchase, dismiss -- vinha do comentario do modelo Bronze e estava errada nas duas pontas: purchase e dismiss nao ocorrem, add_to_cart e recommendation_served nao estavam listados.
         tests:
           - accepted_values:
-              values: ['view', 'click', 'purchase', 'dismiss']
+              # Segue em warn, mas mudou de natureza: era palpite, agora e
+              # detector de drift. Valor novo aqui significa categoria nova
+              # na origem, nao teste mal escrito -- e vale investigar antes
+              # de simplesmente estender a lista.
+              values: ['recommendation_served', 'add_to_cart', 'click', 'view']
               config:
                 severity: warn
 

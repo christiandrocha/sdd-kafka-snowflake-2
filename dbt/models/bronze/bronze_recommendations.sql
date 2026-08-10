@@ -8,7 +8,10 @@
     )
 }}
 
--- Bronze: eventos de recomendacao de ML (view, click, purchase, dismiss).
+-- Bronze: eventos de recomendacao de ML. Tipos observados nos dados em
+-- 2026-08-10: recommendation_served, add_to_cart, click, view. (Ate essa
+-- data este comentario dizia "view, click, purchase, dismiss" -- palpite que
+-- nunca bateu com a origem e que contaminou o teste da Silver.)
 -- A coluna de origem chama-se TIMESTAMP; aqui vem entre aspas e sai como
 -- event_timestamp, para nao colidir com o tipo TIMESTAMP no SQL gerado.
 -- Merge por event_id -- idempotente sobre reentrega do Snowpipe Streaming.
