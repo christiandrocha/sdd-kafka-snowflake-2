@@ -17,6 +17,7 @@ What sets this project apart is not the stack — it is the **control**. Each do
 | Silver layer (10 dbt models) | Materialized | 2026-08-10 |
 | Gold layer (6 dbt models) | Materialized | 2026-08-10 |
 | dbt tests (185) | 0 errors, 10 warnings | 2026-08-10 |
+| Full build + test | 63 s of dbt time (26 models, 185 tests) | 2026-08-10 |
 | CI/CD (`.github/workflows/deploy.yml`) | Never executed | — |
 
 All 10 warnings are referential-integrity checks traced back to the source database — see [Data quality](#data-quality).
@@ -90,6 +91,8 @@ One model per domain, `incremental` with `merge`. Columns arrive **typed and upp
 
 Control columns preserved across every layer: `op`, `source_ts_ms`, `kafka_offset`, `kafka_partition`, `kafka_created_at` — the lineage tying each row to the Kafka event that produced it.
 
+**Delete rows and `not_null`.** A Debezium DELETE event carries **only the primary key** — every payload column arrives null. Bronze keeps those rows on purpose: they are the CDC history, and they are what Silver reads to decide what to discard. So an unscoped `not_null` on a payload column fails the moment a real DELETE is retained — not because the data is wrong, but because the protocol is behaving correctly. The 13 payload `not_null` tests therefore carry `where: "op IS DISTINCT FROM 'd'"`, which keeps the invariant and `error` severity while restating it as "a row that has **not** been deleted must have this column". The 50 tests on primary keys and control columns stay unscoped: both remain populated on a delete row.
+
 ### Silver — current state, metadata-driven
 
 No Silver model contains CDC logic. They all have the same shape:
@@ -120,6 +123,8 @@ The [`get_table_config`](dbt/macros/get_table_config.sql) macro loads the metada
 
 Each Gold model has its **own grain**, and the grain is the thing worth protecting: it is what breaks silently when someone removes a guard clause.
 
+Layer defaults in `dbt_project.yml` state what each layer actually uses — `incremental` for bronze, `table` for silver and gold. Until 2026-08-10 all three declared `incremental` + `merge`, inherited from when the folders were empty, and no silver or gold model obeyed it. That was not dead letter but a trap: a new model dropped into `models/silver/` would inherit `merge` with no `unique_key`, and in that combination dbt degrades to a plain append, silently reinserting everything on each run.
+
 | Model | Materialization | Grain | Aggregation pattern |
 |---|---|---|---|
 | `gold_payment_lifecycle` | incremental | `payment_id` | Additive-partitionable — reference pattern |
@@ -149,7 +154,32 @@ Both Dagster sensors (`bronze_new_data_sensor` and `registry_new_subject_sensor`
 Sensor bronze_new_data_sensor skipped: Sem atividade no Kafka (via Prometheus) — Snowflake não consultado.
 ```
 
-At rest, running this pipeline costs zero credits. The design is completed by an account Resource Monitor and 1-day Time Travel on Bronze tables — both auditable through `scripts/verify_governance.sql`.
+At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables and — pending verification, see below — an account-level Resource Monitor, both auditable through `scripts/verify_governance.sql`.
+
+### What it actually costs
+
+`CDC_WH` is an **X-Small** (1 credit/hour), billed per second with a **60-second minimum per resume**, `auto_suspend=60`.
+
+Measured on 2026-08-10, across six hours that included building all three layers from scratch and running the full test suite several times:
+
+```
+579 queries · 72.7 seconds of execution time  ≈ 0.02 credits of pure compute
+```
+
+Full project, end to end:
+
+| | 4 threads | 8 threads |
+|---|---|---|
+| `dbt run` (26 models) | 28.0 s | **25.6 s** |
+| `dbt test` (185 tests) | 59.8 s | **37.4 s** |
+
+The counter-intuitive part, and the reason no model is incrementalized beyond the two that genuinely need it: **the full rebuild is not the cost.** With a 60-second minimum per resume, a 7-second model build and a 0.5-second one bill identically. On the numbers above, the idle tail dominates the invoice — optimizing the rebuild would attack seconds that are already paid for.
+
+The lever that does move the needle is the **number of resume episodes**, not the duration of each. That is exactly what the sensor gate protects. Raising `threads` from 4 to 8 helped for the same reason: the bottleneck is statement count divided by concurrency, not data volume — which is why tests (independent, 185 of them) gained 37% while models (constrained by the bronze → silver → gold DAG) gained only 9%.
+
+The trigger for revisiting this is wall time crossing 60 seconds in a single invocation, not table size. If `silver_order_items` ever gets there, the answer is `incremental` with partitioned `delete+insert` — **not** `merge`, which would reintroduce the deleted-key-survives-forever bug.
+
+**Not verified:** actual billed credits. `WAREHOUSE_METERING_HISTORY` in `INFORMATION_SCHEMA` returned no rows and `SNOWFLAKE.ACCOUNT_USAGE` is out of reach for `CDC_ROLE`. The warehouse's own `resource_monitor` field is empty; an account-level monitor may exist but confirming it needs `ACCOUNTADMIN`. Both gaps are what `scripts/verify_governance.sql` was written to close.
 
 ---
 
@@ -186,6 +216,14 @@ Warnings were traced back to the source, and **none is a pipeline defect**:
 | `gold_user_behavior` covers 295 of 414 orders | The 119 missing ones are exactly the orphans of `orders.user_key → users_mongo.cpf` | Orders whose CPF has no user record; `gasto_total` is revenue attributable to a known user, not total revenue |
 
 Silver reproduces the source row for row: 414 orders, 210,002 items, the same 7,246 orphans.
+
+### Closed findings
+
+| Finding | How it surfaced | Resolution |
+|---|---|---|
+| 3 `not_null` failures in Bronze | First full-project `dbt test` — the Bronze suite had not been run in months, so two of the three came from a DELETE that predated the session | Payload `not_null` tests scoped with `where: "op IS DISTINCT FROM 'd'"`. See the Bronze section |
+| `event_type` vocabulary was wrong | An `accepted_values` warning | The list came from a code comment, not from the data. Measured and corrected in all four places that carried it |
+| `table_type='log'` contradicting `cdc_strategy='upsert'` | Reading the metadata table | Both domains are append-only at the source (203 and 255 rows for the same number of distinct keys, zero deletes). The **label** was wrong, not the strategy; corrected in the seed, the fallback and the account, with an audit row in `METADATA_HISTORY` |
 
 ---
 
