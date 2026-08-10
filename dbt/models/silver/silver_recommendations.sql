@@ -5,8 +5,9 @@
     )
 }}
 
--- Silver: eventos de recomendacao de ML (view, click, purchase, dismiss),
--- um por event_id.
+-- Silver: eventos de recomendacao de ML, um por event_id.
+-- Tipos observados nos dados em 2026-08-10: recommendation_served,
+-- add_to_cart, click, view.
 --
 -- Mesma tensao de config descrita em silver_search_events.sql:
 -- table_type='log' com cdc_strategy='upsert'. Aqui o efeito e mais brando --
