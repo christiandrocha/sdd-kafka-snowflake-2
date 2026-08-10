@@ -110,9 +110,17 @@ USING (
     SELECT table_name, topic, table_type, cdc_strategy, unique_key, source, changed_by, notes
     FROM VALUES
         -- Event sourcing (append por natureza; upsert por PK para idempotência)
+        --
+        -- search_events e recommendations eram 'log' até 2026-08-10. A etiqueta
+        -- contradizia a estratégia: `log` descreve domínio que preserva DELETE
+        -- como registro histórico, e os dois rodam (corretamente) em `upsert`,
+        -- que descarta DELETE. Medição na origem no mesmo dia: 203 e 255 linhas
+        -- para 203 e 255 chaves distintas, zero deletes — são append-only, o
+        -- mesmo padrão de payment_events. Corrigida a etiqueta, não a
+        -- estratégia; nenhum código ramifica por table_type.
         ('payment_events',  'pg.public.payment_events',  'fact',   'upsert', 'event_id',      'manual', 'bootstrap', 'Eventos do ciclo de pagamento. Campo `event` JSONB aninhado.'),
-        ('search_events',   'pg.public.search_events',   'log',    'upsert', 'search_id',     'manual', 'bootstrap', 'Buscas do usuário.'),
-        ('recommendations', 'pg.public.recommendations', 'log',    'upsert', 'event_id',      'manual', 'bootstrap', 'Eventos de recomendação de ML.'),
+        ('search_events',   'pg.public.search_events',   'fact',   'upsert', 'search_id',     'manual', 'bootstrap', 'Buscas do usuário. Append-only na origem.'),
+        ('recommendations', 'pg.public.recommendations', 'fact',   'upsert', 'event_id',      'manual', 'bootstrap', 'Eventos de recomendação de ML. Append-only na origem.'),
 
         -- Entidades (upsert por PK — snapshot de estado)
         ('orders',          'pg.public.orders',          'entity', 'upsert', 'order_id',      'manual', 'bootstrap', 'Tabela hub. Liga os domínios via *_key (CPF, CNPJ, driver_id).'),

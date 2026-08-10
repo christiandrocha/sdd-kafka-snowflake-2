@@ -163,7 +163,7 @@ models:
 
   - name: silver_search_events
     description: >
-      Buscas do usuario, uma por search_id. Registrado como table_type='log' mas com cdc_strategy='upsert' -- ver o cabecalho do modelo.
+      Buscas do usuario, uma por search_id. Dominio append-only na origem (203 linhas para 203 chaves, zero deletes em 2026-08-10), registrado como table_type='fact' com cdc_strategy='upsert'.
     columns:
       - name: search_id
         tests: [unique, not_null]
@@ -186,7 +186,7 @@ models:
 
   - name: silver_recommendations
     description: >
-      Eventos de recomendacao de ML, um por event_id. Mesma tensao table_type='log' com cdc_strategy='upsert' descrita em silver_search_events.
+      Eventos de recomendacao de ML, um por event_id. Append-only na origem, mesmo padrao descrito em silver_search_events.
     columns:
       - name: event_id
         tests: [unique, not_null]

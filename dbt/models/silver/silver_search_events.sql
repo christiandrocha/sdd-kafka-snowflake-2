@@ -7,17 +7,19 @@
 
 -- Silver: buscas do usuario, uma linha por search_id.
 --
--- ATENCAO A UMA TENSAO DE CONFIG: este dominio esta registrado com
--- table_type='log' mas cdc_strategy='upsert' -- tanto no seed de
--- scripts/bootstrap_config.sql quanto no fallback de get_table_config().
--- Consequencia pratica: resolve_cdc trata a busca como entidade, nao como
--- log. Um DELETE na origem some com a linha aqui, em vez de preserva-la
--- como registro historico (que e o que a estrategia 'log' faria).
+-- Ate 2026-08-10 este dominio estava registrado como table_type='log' com
+-- cdc_strategy='upsert', o que era contraditorio: `log` descreve dominio que
+-- preserva DELETE como registro historico, e `upsert` descarta DELETE.
+-- Resolvido corrigindo a ETIQUETA, nao a estrategia -- a medicao na origem
+-- mostrou 203 linhas para 203 chaves distintas e zero deletes, ou seja,
+-- append-only, o mesmo padrao de payment_events, que ja era 'fact'.
 --
--- Isso e intencional para o dominio? Se a intencao era log-de-auditoria,
--- muda-se cdc_strategy para 'log' em CONFIG.TABLE_METADATA e este modelo
--- passa a manter tudo, sem tocar em SQL nenhum. Deixado como esta porque
--- estrategia de dominio e decisao de negocio, nao de refactor.
+-- A estrategia 'upsert' era e continua sendo a certa aqui, e ela e o que da
+-- de graca a garantia de unicidade testada em schema.yml. Se um dia a
+-- intencao virar auditoria ("quero saber que uma busca foi apagada"),
+-- a mudanca e trocar cdc_strategy para 'log' em CONFIG.TABLE_METADATA -- mas
+-- ai o `unique` de search_id e o accepted_values de `op` precisam mudar
+-- junto, e o gold_user_behavior passa a precisar de deduplicacao propria.
 --
 -- 'table' em vez do default 'incremental' de silver: motivo em
 -- silver_orders.sql.
