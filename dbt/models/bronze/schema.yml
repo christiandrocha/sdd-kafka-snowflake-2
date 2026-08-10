@@ -4,6 +4,29 @@ version: 2
 # snowflake.enable.schematization=true). As colunas de metadados op,
 # source_ts_ms, kafka_offset, kafka_partition e kafka_created_at existem em
 # todos os modelos e sao testadas da mesma forma em cada um.
+#
+# POR QUE OS not_null DE PAYLOAD TEM `where: op IS DISTINCT FROM 'd'`
+#
+# Um evento de DELETE do Debezium carrega APENAS a chave primaria -- todas as
+# colunas de payload chegam nulas. Verificado na tabela raw em 2026-08-10: a
+# linha de delete do teste ponta a ponta veio com ORDER_ITEM_ID preenchido e
+# PRODUCT_ID nulo.
+#
+# A Bronze preserva a linha de delete de proposito: ela E o historico CDC, e e
+# dela que a Silver decide o que descartar. Logo, um `not_null` sem escopo
+# sobre coluna de payload falha assim que um DELETE real e retido -- nao por
+# defeito de dado, mas por comportamento correto do protocolo.
+#
+# Isso nao era teoria: em 2026-08-10 o primeiro `dbt test` do projeto inteiro
+# acusou 3 FAIL exatamente assim (bronze_order_items.order_id,
+# bronze_orders.user_key e restaurant_key), com 1 linha cada. Dois deles vinham
+# de um DELETE anterior a essa sessao; ninguem tinha rodado os testes da Bronze
+# desde entao.
+#
+# O escopo preserva a invariante e a severidade error -- a afirmacao passa a
+# ser "linha NAO apagada precisa ter esta coluna". Chave primaria e colunas de
+# controle ficam de fora do escopo de proposito: as duas continuam preenchidas
+# na linha de delete, entao ali o not_null vale sem ressalva.
 
 models:
   - name: bronze_payment_events
@@ -16,19 +39,31 @@ models:
 
       - name: payment_id
         description: "Pagamento a que o evento pertence. Varios eventos compartilham o mesmo payment_id."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: event_name
         description: "Nome do evento no ciclo: created, authorized, captured, succeeded, settled, closed, refunded."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: event_timestamp_ms
         description: "Timestamp do evento em epoch ms. Origem manda int ou float cientifico; CAST via FLOAT cobre os dois."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: event_timestamp
         description: "event_timestamp_ms convertido para TIMESTAMP_NTZ."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: dt_current_timestamp
         description: "Timestamp de processamento da origem. Auditoria apenas."
@@ -72,11 +107,17 @@ models:
 
       - name: user_key
         description: "CPF do usuario. Junta com users_mongo.cpf / users_mssql.cpf."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: restaurant_key
         description: "CNPJ do restaurante. Junta com restaurants.cnpj."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: driver_key
         description: "driver_id do entregador. Junta com drivers.driver_id."
@@ -123,7 +164,10 @@ models:
 
       - name: order_id
         description: "Pedido a que o item pertence. Junta com bronze_orders.order_id."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: product_id
         description: "Produto (PRD-XXXXX). O dominio products e Tier 2 -- sem tabela de dimensao correspondente."
@@ -197,7 +241,10 @@ models:
 
       - name: driver_id
         description: "Entregador do turno. Junta com drivers.driver_id."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: city
         description: "Cidade."
@@ -332,7 +379,10 @@ models:
 
       - name: event_type
         description: "Tipos observados nos dados em 2026-08-10: recommendation_served, add_to_cart, click, view."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: event_timestamp
         description: "Momento do evento (coluna TIMESTAMP na origem)."
@@ -376,7 +426,10 @@ models:
 
       - name: cpf
         description: "CPF -- junta com orders.user_key."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: email
         description: "E-mail."
@@ -432,7 +485,10 @@ models:
 
       - name: cpf
         description: "CPF -- junta com users_mongo.cpf e orders.user_key."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: first_name
         description: "Nome."
@@ -494,7 +550,10 @@ models:
 
       - name: cnpj
         description: "CNPJ -- junta com orders.restaurant_key."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: name
         description: "Nome do restaurante."
@@ -562,7 +621,10 @@ models:
 
       - name: driver_id
         description: "driver_id -- junta com orders.driver_key e driver_shifts.driver_id."
-        tests: [not_null]
+        tests:
+          - not_null:
+              config:
+                where: "op IS DISTINCT FROM 'd'"
 
       - name: first_name
         description: "Nome."
