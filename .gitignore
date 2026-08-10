@@ -61,7 +61,13 @@ presentation/
 docs/
 demos/
 images/
-.claude/
+# `.claude/*` em vez de `.claude/` porque o git não desce em diretório excluído:
+# com `.claude/` a negação abaixo não teria efeito nenhum.
+.claude/*
+# Exceção: o registro SDD deste pipeline (DEFINE/DESIGN/BUILD_REPORT/SHIPPED) é
+# engenharia do repo, não conteúdo de curso — explica por que o código está como
+# está, e os commits referenciam esses arquivos.
+!.claude/sdd/
 .cursor/
 AGENTS.md
 CLAUDE.md
