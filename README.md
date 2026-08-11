@@ -154,9 +154,11 @@ Both Dagster sensors (`bronze_new_data_sensor` and `registry_new_subject_sensor`
 Sensor bronze_new_data_sensor skipped: Sem atividade no Kafka (via Prometheus) — Snowflake não consultado.
 ```
 
-At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables — verified on 2026-08-11, though inherited from defaults rather than configured.
+At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables, now declared at database level rather than inherited, and by `cdc_poc_monitor` — a spending cap of 20 credits per month bound to `CDC_WH`, which notifies at 50% and 75%, suspends at 90% and suspends immediately at 100%.
 
-**There is no Resource Monitor.** Earlier versions of this section claimed an account-level one; running `scripts/verify_governance.sql` as `ACCOUNTADMIN` on 2026-08-11 showed `SHOW RESOURCE MONITORS` returning zero rows and the account's `RESOURCE_MONITOR` parameter unset, with the warehouse's own field null. All three places a spending cap could live are empty, so nothing stops this account from burning credits — the protection here is behavioural (the warehouse suspends after 60 seconds, and the sensors check Prometheus before touching Snowflake), not enforced.
+**Both of those became true on 2026-08-11, and neither was true before.** For a week this section claimed an account-level Resource Monitor that did not exist. Running `scripts/verify_governance.sql` as `ACCOUNTADMIN` settled it: `SHOW RESOURCE MONITORS` returned zero rows, the account parameter was unset, and the warehouse's own field was null. All three places a spending cap could live were empty. The monitor described above was then created by `scripts/snowflake_setup.sql` — a file the README had referenced for just as long without it existing either.
+
+One caveat on the alerts. `NOTIFY_USERS` is still unset, and it only delivers to users with a **verified** email; the three service identities have none. Until a human login is added there, the two notification triggers are decorative and the first signal the account gives is the warehouse suspending at 90%.
 
 The same run surfaced something nobody had looked at: `CDC_WH` has `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute. On this workload it is almost certainly dormant — the scans are far too small for acceleration to engage — but it is precisely the kind of spend a monitor would cap, and there is no monitor.
 
@@ -376,7 +378,7 @@ Run manually through SnowSQL or a worksheet — deliberately **not** automated, 
 | `scripts/bootstrap_config.sql` | Creates the `CONFIG` schema and seeds `TABLE_METADATA` |
 | `scripts/streams_and_tasks.sql` | Streams and Tasks feeding the sensors |
 | `scripts/create_readonly_role.sql` | Read-only role for external tooling |
-| `scripts/snowflake_setup.sql` | Creates `cdc_poc_monitor` and pins Time Travel. **Never executed** |
+| `scripts/snowflake_setup.sql` | Creates `cdc_poc_monitor` and pins Time Travel. First run 2026-08-11 |
 | `scripts/verify_governance.sql` | Audits Resource Monitor, Time Travel and consumption |
 | `scripts/sync_metadata.py` | Syncs Schema Registry → `TABLE_METADATA` |
 | `scripts/init.sql` | Source Postgres initialization |
@@ -411,12 +413,14 @@ The three service identities under `keys/` hold exactly one role each — `DAGST
 | Claim | Status | How to close it |
 |---|---|---|
 | ~~Billed credit consumption~~ | **Answered on 2026-08-11: ≈ 1.72 credits since the account was created**, across four days with activity and two consecutive days at exactly zero. Figures and the reconciliation against query time are in the cost section above | Closed |
-| ~~Account-level Resource Monitor~~ | **Answered on 2026-08-11: there is none.** Under `ACCOUNTADMIN`, `SHOW RESOURCE MONITORS` returned zero rows and `SHOW PARAMETERS LIKE 'RESOURCE_MONITOR' IN ACCOUNT` returned nothing, with `CDC_WH.resource_monitor` null. Zero rows under `CDC_ROLE` had been ambiguous; under `ACCOUNTADMIN` it is an answer | Closed |
-| ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither exists. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file that did not exist — consistent with it never having run. That script was written on 2026-08-11 and is still waiting on its first execution | Closed |
+| ~~Account-level Resource Monitor~~ | **Answered on 2026-08-11: there was none, and now there is one.** Under `ACCOUNTADMIN`, `SHOW RESOURCE MONITORS` returned zero rows and `SHOW PARAMETERS LIKE 'RESOURCE_MONITOR' IN ACCOUNT` returned nothing, with `CDC_WH.resource_monitor` null. Zero rows under `CDC_ROLE` had been ambiguous; under `ACCOUNTADMIN` it was an answer. `cdc_poc_monitor` was created the same day at 09:54 and bound to the warehouse — note that it is a **warehouse-level** cap, so serverless consumption still has no ceiling | Closed |
+| ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither existed. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file that did not exist — consistent with it never having run. That script was written and executed for the first time on 2026-08-11; `cdc_trial_monitor` was never real | Closed |
 
 A fourth claim used to sit in this table and has left it. The 1-day Time Travel on Bronze was checked on 2026-08-11 with `SHOW TABLES IN SCHEMA CDC_POC.BRONZE` under `CDC_ROLE_RO` — it never needed `ACCOUNTADMIN`, and listing it as blocked was an error. All 20 objects in the schema report `retention_time = 1`: the 10 landing tables written by the connector and the 10 transient `BRONZE_*` tables built by dbt.
 
-The number is right, but it was never a design decision. dbt-snowflake materializes tables as `TRANSIENT` by default, and 1 day is the maximum a transient table can hold; the permanent landing tables sit at the account default. Nothing in `dbt_project.yml` sets a retention. The guarantee is real today and would change silently if either default moved.
+The number was right, but at the time it was not a design decision. dbt-snowflake materializes tables as `TRANSIENT` by default, and 1 day is the maximum a transient table can hold; the permanent landing tables sat at the account default, with nothing in `dbt_project.yml` setting a retention. The guarantee was real and would have changed silently if that default moved.
+
+Half of that fragility is now gone. `scripts/snowflake_setup.sql` set `DATA_RETENTION_TIME_IN_DAYS = 1` on the database itself on 2026-08-11, confirmed by `SHOW PARAMETERS` reporting `level = DATABASE` instead of an inherited value — so a change to the account default no longer reaches Bronze. The transient ceiling on the dbt-built tables is untouched, but a ceiling behaves differently from a default: it cannot drift upward without someone changing the materialization.
 
 ### Untested code paths
 

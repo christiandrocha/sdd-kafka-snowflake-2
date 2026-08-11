@@ -24,9 +24,27 @@
 -- e o erro que elas recebem ao tentar é "Insufficient privileges to operate
 -- on account".
 --
--- ESTE SCRIPT NUNCA FOI EXECUTADO. Escrito em 2026-08-11 a partir do estado
--- lido na mesma data. Rode passo a passo, conferindo cada retorno -- não
--- cole o arquivo inteiro de uma vez.
+-- EXECUTADO PELA PRIMEIRA VEZ em 2026-08-11 09:54, e o resultado confere:
+--
+--   SHOW RESOURCE MONITORS -> CDC_POC_MONITOR, cota 20, usados 0,00,
+--                             level WAREHOUSE, MONTHLY, notify 50%/75%,
+--                             suspend 90%, suspend_immediate 100%
+--   CDC_WH.resource_monitor -> CDC_POC_MONITOR (era null)
+--   SHOW PARAMETERS ... IN DATABASE CDC_POC -> level = DATABASE (era herdado)
+--
+-- `used_credits = 0,00` está certo e não é sintoma: o monitor conta a partir
+-- do START_TIMESTAMP dele, então os 1,72 crédito anteriores não entram na cota.
+--
+-- ARMADILHA DE VERIFICAÇÃO, custou uma leitura errada no dia: sob um papel
+-- sem privilégio sobre o monitor, `SHOW WAREHOUSES` devolve
+-- `resource_monitor = null` mesmo com o vínculo existindo. É o mesmo problema
+-- que o verify_governance.sql descreve para "zero linhas", invertido -- null
+-- sob papel fraco não distingue "não há vínculo" de "não enxergo". Confirme
+-- como ACCOUNTADMIN.
+--
+-- Rode passo a passo, conferindo cada retorno -- não cole o arquivo inteiro
+-- de uma vez. No Snowsight, executar tudo de uma vez mostra só o resultado do
+-- último comando, e os RESULT_SCAN intermediários passam despercebidos.
 -- ------------------------------------------------------------------------
 
 USE ROLE ACCOUNTADMIN;
