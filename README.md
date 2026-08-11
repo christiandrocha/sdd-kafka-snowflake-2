@@ -149,11 +149,15 @@ In `gold_user_behavior` the `cpf → user_id` bridge is deliberately **not** ded
 
 The warehouse is the expensive part of the account, and the pipeline is designed not to wake it without reason.
 
+The trigger path has four hops — Kafka metrics in Prometheus, then ten Snowflake Streams with their gate Tasks, then `CONFIG.PENDING_RUNS`, then the Dagster sensor, then dbt. Each hop earns its place, but the chain has no end-to-end health check: if the gate tasks stop, or `PENDING_RUNS` stops being written, the pipeline goes quiet and *looks* fine. That is not hypothetical — on 2026-08-11 the sink sat with four dead tasks while Debezium stayed green, and the only reason anyone noticed was that someone was waiting for a specific row to appear.
+
 Both Dagster sensors (`bronze_new_data_sensor` and `registry_new_subject_sensor`, 60-second interval) **query Prometheus before Snowflake**. With no new Kafka traffic, the sensor skips without opening a connection:
 
 ```
 Sensor bronze_new_data_sensor skipped: Sem atividade no Kafka (via Prometheus) — Snowflake não consultado.
 ```
+
+One limit of the gate design is worth stating before anyone calls it production-ready. The ten gate Tasks evaluate `SYSTEM$STREAM_HAS_DATA` for free, which is what makes idleness cost nothing — but when they fire they run on `CDC_WH`, which bills a 60-second minimum per resume. Under *continuous* traffic, ten tasks firing every minute keep the warehouse on permanently, which is the exact behaviour the redesign existed to remove. The design solves the bursty case, and this workload is bursty; it does not solve the streaming case.
 
 At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables, now declared at database level rather than inherited, and by `cdc_poc_monitor` — a spending cap of 20 credits per month bound to `CDC_WH`, which notifies at 50% and 75%, suspends at 90% and suspends immediately at 100%.
 
@@ -237,7 +241,23 @@ The figures above are **execution time**, not billed credits — see [Known gaps
 
 ## Data quality
 
-185 dbt tests: 83 in Bronze, 72 in Silver, 30 in Gold.
+188 dbt tests: 83 in Bronze, 72 in Silver, 30 in Gold, and 3 singular tests that check something the other 185 cannot.
+
+### What the schema tests could not see
+
+The 185 column tests — `unique`, `not_null`, `accepted_values`, `relationships` — all verify the *shape* of the data. None of them verifies that Gold reflects Silver, which is precisely the question an incremental model answers wrongly when it breaks.
+
+That gap had a cost. On 2026-08-11 the `alvo` CTE in `gold_payment_lifecycle` skipped an event that arrived out of order: Silver held 4 events for a payment while Gold kept reporting 3, with `capturado_em` null. All 26 tests in the chain passed and dbt reported success. A test suite that cannot distinguish *correct Gold* from *stale Gold* is not testing the hardest thing the project does.
+
+Three singular tests in `dbt/tests/` close that:
+
+| Test | What it asserts | Why |
+|---|---|---|
+| `assert_gold_lifecycle_reconcilia_silver` | Event count and latest-event watermark match per `payment_id`, in both directions | Would have failed on the bug above |
+| `assert_bronze_sem_backlog_do_landing` | Every distinct key the sink landed exists in the matching Bronze model, across all 10 domains | Catches "sink delivered, dbt never processed" and a stuck incremental watermark |
+| `assert_table_metadata_sem_drift` | `CONFIG.TABLE_METADATA` matches what this commit expects, for the four columns that change behaviour | `cdc_strategy` is read at compile time, so a row edited in Snowflake changes a model's semantics with no diff in git |
+
+The second one deserves a note on what it deliberately is *not*. `models/config/sources.yml` has declared freshness thresholds (warn 5 min, error 15 min) since it was written, and nothing in this project has ever run `dbt source freshness` — orphaned configuration. Wiring it up was the obvious move and would have been wrong: a clock-based test cannot tell "the stack is off on purpose" from "ingestion is broken", and this stack is off most of the time, so the check would live red. An alarm that is always red is the problem it was meant to solve. The backlog test asks the question that has an objective answer with the stack stopped.
 
 Silver tests what Bronze cannot guarantee — the invariants CDC resolution adds:
 
@@ -352,7 +372,11 @@ curl -sf http://localhost:8083/connectors
 
 Before the first dbt execution, run the Snowflake scripts in order: `bootstrap_config.sql` (creates the `CONFIG` schema), then `streams_and_tasks.sql`.
 
-**Rotating the Snowflake key means re-running that last command.** `register_connectors.sh` resolves `${SNOWFLAKE_PRIVATE_KEY}` with `envsubst` and `PUT`s the *resolved* configuration into Kafka Connect, so the private key is copied into Connect's own config topic at registration time. Editing `.env` afterwards changes nothing there — the sink keeps presenting the old key and fails authentication the next time it starts, while every other consumer (dbt, Dagster, the CI workflow) picks the new key up automatically because they read the file at `SNOWFLAKE_PRIVATE_KEY_PATH`. Debezium is unaffected; it authenticates against Postgres, not Snowflake. Learned the hard way on 2026-08-11, during a rotation of the `DAGSTER_SERVICE_USER` key.
+**Rotating the Snowflake key means re-running that last command.** `register_connectors.sh` resolves the private key with `envsubst` and `PUT`s the *resolved* configuration into Kafka Connect, so the key is copied into Connect's own config topic at registration time. Changing the key afterwards changes nothing there — the sink keeps presenting the old one and fails authentication the next time it starts, while every other consumer (dbt, Dagster, the CI workflow) picks the new key up automatically because they read the file at `SNOWFLAKE_PRIVATE_KEY_PATH`. Debezium is unaffected; it authenticates against Postgres, not Snowflake. Learned the hard way on 2026-08-11, during a rotation of the `DAGSTER_SERVICE_USER` key: four sink tasks dead with `JWT token is invalid` while Debezium stayed green.
+
+**The key now lives in exactly one place.** Until that same day, `.env` carried the private key twice — as `SNOWFLAKE_PRIVATE_KEY_PATH` and, separately, as the whole PKCS8 body in `SNOWFLAKE_PRIVATE_KEY`, because the Kafka connector and `sync_metadata.py` need it as a string. The duplication cost a leaked key (a `grep` over `.env` printed it in full) and turned rotation into a five-location procedure. Both consumers now derive the string from the `.p8`, and the variable is gone from `.env`; setting it still works, for environments that have not migrated.
+
+There is a wrinkle worth knowing, and it is why the duplication existed at all: `SNOWFLAKE_PRIVATE_KEY_PATH` holds a path *inside the containers* (`./keys:/secrets:ro`), because dbt and Dagster are what consume it — while `register_connectors.sh` runs on the host, where `/secrets` does not exist. The script tries the literal path first and falls back to the same filename under `keys/`.
 
 ### dbt
 
@@ -400,8 +424,11 @@ docker compose run --rm --no-deps --entrypoint bash dagster-daemon \
 
 Run manually through SnowSQL or a worksheet — deliberately **not** automated, because account-governance changes require `ACCOUNTADMIN` and human review:
 
+**On a fresh account, run them in this order:** `00_account_bootstrap` → `bootstrap_config` → `streams_and_tasks` → `snowflake_setup` → `create_readonly_role` → `verify_governance`. Until 2026-08-11 that sequence had no first step, and the consequence was larger than a missing file: nothing in this repository created the database, the warehouse, the role or the three service users, so the project could not be rebuilt from git at all. Every other script assumed those objects into existence. It is also why `deploy.yml` could never have worked against a `production` environment — there was no way to create one.
+
 | Script | Purpose |
 |---|---|
+| `scripts/00_account_bootstrap.sql` | Database, schemas, warehouse, role, grants and the three service users. **Never executed** |
 | `scripts/bootstrap_config.sql` | Creates the `CONFIG` schema and seeds `TABLE_METADATA` |
 | `scripts/streams_and_tasks.sql` | Streams and Tasks feeding the sensors |
 | `scripts/create_readonly_role.sql` | Read-only role for external tooling |

@@ -39,6 +39,45 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 set -a; source "$ENV_FILE"; set +a
+
+# ── Fonte única do material da chave ─────────────────────────────────────────
+#
+# O connector do Snowflake precisa da chave privada como corpo base64 PKCS8
+# DER numa variável; o dbt e o Dagster precisam dela como arquivo .p8. Até
+# 2026-08-11 o `.env` guardava as DUAS coisas, e o custo apareceu de duas
+# formas no mesmo dia: um `grep` no `.env` vazou a chave inteira, e a rotação
+# virou um procedimento de cinco lugares porque o mesmo segredo estava escrito
+# em dois formatos.
+#
+# Agora o arquivo é a fonte e a variável é derivada dele. `SNOWFLAKE_PRIVATE_KEY`
+# no `.env` passa a ser opcional — se estiver lá, continua valendo, para não
+# quebrar ambiente de quem ainda não migrou.
+# ATENÇÃO AO CONTEXTO DE EXECUÇÃO. `SNOWFLAKE_PRIVATE_KEY_PATH` no `.env` é o
+# caminho DENTRO DO CONTAINER (`./keys:/secrets:ro` no compose), porque quem o
+# consome é o dbt e o Dagster. Este script roda no HOST, onde `/secrets` não
+# existe — e era essa incompatibilidade que justificava manter a chave também
+# como variável inline. A derivação abaixo tenta o caminho literal e, se ele
+# não existir, procura o mesmo arquivo em `keys/` a partir da raiz do repo.
+if [ -z "${SNOWFLAKE_PRIVATE_KEY:-}" ]; then
+    KEY_FILE=""
+    if [ -r "${SNOWFLAKE_PRIVATE_KEY_PATH:-/dev/null}" ]; then
+        KEY_FILE="$SNOWFLAKE_PRIVATE_KEY_PATH"
+    elif [ -n "${SNOWFLAKE_PRIVATE_KEY_PATH:-}" ] \
+         && [ -r "$(dirname "$0")/../keys/$(basename "$SNOWFLAKE_PRIVATE_KEY_PATH")" ]; then
+        KEY_FILE="$(dirname "$0")/../keys/$(basename "$SNOWFLAKE_PRIVATE_KEY_PATH")"
+    fi
+
+    if [ -n "$KEY_FILE" ]; then
+        SNOWFLAKE_PRIVATE_KEY=$(grep -v '^-----' "$KEY_FILE" | tr -d '\n')
+        export SNOWFLAKE_PRIVATE_KEY
+        echo -e "${GRAY}    chave derivada de ${KEY_FILE}${RESET}"
+    else
+        echo -e "${RED}✖   Sem material de chave utilizável."
+        echo -e "    SNOWFLAKE_PRIVATE_KEY_PATH='${SNOWFLAKE_PRIVATE_KEY_PATH:-}' não existe no host,"
+        echo -e "    e não há keys/$(basename "${SNOWFLAKE_PRIVATE_KEY_PATH:-sem_caminho}") no repositório.${RESET}"
+        exit 1
+    fi
+fi
 echo -e "${GREEN}✅  Loaded credentials from ${ENV_FILE}${RESET}"
 
 echo -e "\n${CYAN}══════════════════════════════════════════════════════════${RESET}"
