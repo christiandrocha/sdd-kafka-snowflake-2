@@ -160,10 +160,13 @@ At rest, running this pipeline costs zero credits. The design is completed by 1-
 
 One caveat on the alerts. `NOTIFY_USERS` is still unset, and it only delivers to users with a **verified** email; the three service identities have none. Until a human login is added there, the two notification triggers are decorative and the first signal the account gives is the warehouse suspending at 90%.
 
-The same run surfaced something nobody had looked at: `CDC_WH` has `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute, switched on by default rather than by decision. `QUERY_ACCELERATION_HISTORY` was then checked over 30 days and returned **nothing** — it has never engaged once, which is what the scan sizes here predict. It is a cost path with no demonstrated benefit, and turning it off costs nothing:
+The same run surfaced something nobody had looked at: **both** warehouses have `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute, switched on by default rather than by decision. `QUERY_ACCELERATION_HISTORY` was then checked over 30 days and returned **nothing** — it has never engaged once, anywhere, which is what the scan sizes here predict. It is a cost path with no demonstrated benefit.
+
+**Still enabled at the time of writing.** `CDC_ROLE` lacks `MODIFY` on the warehouses, so this needs the same worksheet as everything else in this section:
 
 ```sql
-ALTER WAREHOUSE CDC_WH SET ENABLE_QUERY_ACCELERATION = FALSE;
+ALTER WAREHOUSE CDC_WH     SET ENABLE_QUERY_ACCELERATION = FALSE;
+ALTER WAREHOUSE COMPUTE_WH SET ENABLE_QUERY_ACCELERATION = FALSE;
 ```
 
 ### What it actually costs
@@ -204,6 +207,16 @@ The two missing days are the important ones. Nobody worked that weekend, the sta
 Two things fall out of that table. The first is a correction: an earlier draft of this section warned that serverless ingestion was unmeasured and "not a rounding error". It is a rounding error — 0.0005 credits, thirteen thousandths of one percent. Snowpipe Streaming bills by throughput, and 2,211 events is not throughput. The instinct to distrust an unmeasured number was right; the guess about its size was wrong, and the measurement is what settles it.
 
 The second is larger. Splitting warehouse metering by name gives `COMPUTE_WH` **1.8214** against `CDC_WH` **1.8076** — the default warehouse behind Snowsight worksheets costs marginally *more* than the entire data pipeline, and metering starts on 2026-08-04, two days before `CDC_WH` existed. Roughly half of this account's compute has nothing to do with this project. `cdc_poc_monitor` caps `CDC_WH` and only `CDC_WH`, so the larger consumer runs with no ceiling at all; an account-level monitor, or a second one bound to `COMPUTE_WH`, is what would actually close that. Three other warehouses exist besides those two — `SNOWFLAKE_LEARNING_WH`, `SYSTEM$STREAMLIT_NOTEBOOK_WH` and the `CLOUD_SERVICES_ONLY` bucket — none of them monitored either.
+
+**The single highest-return change available is one number on a warehouse nobody was looking at.** `COMPUTE_WH` runs with `AUTO_SUSPEND = 300`, five times the 60 seconds set on `CDC_WH`. Every worksheet query keeps it burning for five minutes after it finishes, and interactive querying is exactly the pattern where the idle tail dwarfs the work. A short query with a 300-second tail costs about 0.085 credits; the same query at 60 seconds falls to the billing floor, roughly 0.017. Against the 1.82 credits already spent there, that is on the order of 1.4 credits — near 37% of everything this account has consumed, in one statement:
+
+```sql
+ALTER WAREHOUSE COMPUTE_WH SET AUTO_SUSPEND = 60;
+```
+
+The trade-off is real but small here. Suspending sooner means more resumes, each carrying its own 60-second minimum, so the saving shrinks toward nothing if queries arrive less than a minute apart. A suspended warehouse also drops its local disk cache, which slows repeated exploration of the same table — on tables of a few thousand rows, that cache is not worth the uptime it costs.
+
+Worth noticing what this says about the account as a whole: both warehouses are X-Small Gen2, both have query acceleration on with scale factor 2, and neither was monitored. None of that was chosen. The 60-second `AUTO_SUSPEND` on `CDC_WH` is the only deliberate setting in the group, applied to the one warehouse somebody thought to examine.
 
 One caveat on the rate. `CDC_WH` reports `resource_constraint = STANDARD_GEN_2`, a second-generation warehouse, and the "1 credit/hour" above is the classic X-Small rate. Anything in this section derived from that rate — the uptime figure in particular — should be re-checked against Snowflake's current rate card before being quoted to anyone. The credit totals themselves come straight from the billing view and do not depend on it.
 
