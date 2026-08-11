@@ -160,7 +160,11 @@ At rest, running this pipeline costs zero credits. The design is completed by 1-
 
 One caveat on the alerts. `NOTIFY_USERS` is still unset, and it only delivers to users with a **verified** email; the three service identities have none. Until a human login is added there, the two notification triggers are decorative and the first signal the account gives is the warehouse suspending at 90%.
 
-The same run surfaced something nobody had looked at: `CDC_WH` has `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute. On this workload it is almost certainly dormant — the scans are far too small for acceleration to engage — but it is precisely the kind of spend a monitor would cap, and there is no monitor.
+The same run surfaced something nobody had looked at: `CDC_WH` has `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute, switched on by default rather than by decision. `QUERY_ACCELERATION_HISTORY` was then checked over 30 days and returned **nothing** — it has never engaged once, which is what the scan sizes here predict. It is a cost path with no demonstrated benefit, and turning it off costs nothing:
+
+```sql
+ALTER WAREHOUSE CDC_WH SET ENABLE_QUERY_ACCELERATION = FALSE;
+```
 
 ### What it actually costs
 
@@ -174,7 +178,7 @@ Measured on 2026-08-10, across six hours that included building all three layers
 
 That figure is query time. The invoice for the same day, read from `ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY` as `ACCOUNTADMIN` on 2026-08-11, was **1.1188 credits** — fifty-six times more. Both numbers are correct and they measure different things: one is time spent executing, the other is time spent switched on. At the nominal X-Small rate that billed day is a little over an hour of warehouse uptime to run 72.7 seconds of queries, so **execution accounts for under 2% of what was actually paid.** Everything else is the 60-second minimum and the idle tail before auto-suspend. It is the sharpest available evidence for the argument below, and it was invisible until someone with `ACCOUNTADMIN` looked.
 
-`CDC_WH` consumption since the account was created on 2026-08-06 — this is one warehouse, not the account:
+`CDC_WH` consumption since the warehouse was created on 2026-08-06 — one warehouse, not the account, which was already metering credits on 2026-08-04:
 
 | Day | Credits |
 |---|---|
@@ -187,7 +191,19 @@ That figure is query time. The invoice for the same day, read from `ACCOUNT_USAG
 
 The two missing days are the important ones. Nobody worked that weekend, the stack was up, and the warehouse billed nothing at all — which turns "at rest, this pipeline costs zero credits" from a claim about sensor behaviour into a measured fact about the invoice. The near-real-time cross-check in `INFORMATION_SCHEMA` agreed with the billed figures to four decimal places for the current day, so `ACCOUNT_USAGE` is not lagging here.
 
-**Treat 1.72 as a floor, not a total.** `WAREHOUSE_METERING_HISTORY` reports warehouse compute for `CDC_WH` and nothing else. Snowpipe Streaming — which is how the Kafka sink writes every row into Bronze — bills as a serverless service in separate views, as do Tasks that run without a warehouse and the cloud-services layer. None of that was measured on 2026-08-11, and none of it is visible to `CDC_ROLE`. For a pipeline whose entire ingestion path is serverless, the unmeasured part is not a rounding error.
+**That is one warehouse, not the account.** `METERING_HISTORY`, grouped by service on the same day, puts the whole account at roughly **3.8 credits** over 30 days, and the breakdown is not what this project's documentation would lead you to expect:
+
+| Service | Credits | |
+|---|---|---|
+| `WAREHOUSE_METERING` | 3.4724 | all warehouses |
+| `SNOWFLAKE_COCO_SNOWSIGHT` | 0.3474 | the cost of using the UI |
+| `SNOWPIPE_STREAMING` | 0.0005 | this pipeline's entire ingestion path |
+| `TELEMETRY_DATA_INGEST` | 0.0001 | |
+| `PIPE` | 0.0000 | classic Snowpipe, unused |
+
+Two things fall out of that table. The first is a correction: an earlier draft of this section warned that serverless ingestion was unmeasured and "not a rounding error". It is a rounding error — 0.0005 credits, thirteen thousandths of one percent. Snowpipe Streaming bills by throughput, and 2,211 events is not throughput. The instinct to distrust an unmeasured number was right; the guess about its size was wrong, and the measurement is what settles it.
+
+The second is larger. Splitting warehouse metering by name gives `COMPUTE_WH` **1.8214** against `CDC_WH` **1.8076** — the default warehouse behind Snowsight worksheets costs marginally *more* than the entire data pipeline, and metering starts on 2026-08-04, two days before `CDC_WH` existed. Roughly half of this account's compute has nothing to do with this project. `cdc_poc_monitor` caps `CDC_WH` and only `CDC_WH`, so the larger consumer runs with no ceiling at all; an account-level monitor, or a second one bound to `COMPUTE_WH`, is what would actually close that. Three other warehouses exist besides those two — `SNOWFLAKE_LEARNING_WH`, `SYSTEM$STREAMLIT_NOTEBOOK_WH` and the `CLOUD_SERVICES_ONLY` bucket — none of them monitored either.
 
 One caveat on the rate. `CDC_WH` reports `resource_constraint = STANDARD_GEN_2`, a second-generation warehouse, and the "1 credit/hour" above is the classic X-Small rate. Anything in this section derived from that rate — the uptime figure in particular — should be re-checked against Snowflake's current rate card before being quoted to anyone. The credit totals themselves come straight from the billing view and do not depend on it.
 
@@ -412,7 +428,7 @@ The three service identities under `keys/` hold exactly one role each — `DAGST
 
 | Claim | Status | How to close it |
 |---|---|---|
-| ~~Billed credit consumption~~ | **Answered on 2026-08-11: ≈ 1.72 credits since the account was created**, across four days with activity and two consecutive days at exactly zero. Figures and the reconciliation against query time are in the cost section above | Closed |
+| ~~Billed credit consumption~~ | **Answered on 2026-08-11: ≈ 1.8 credits on `CDC_WH`, ≈ 3.8 across the whole account**, with two consecutive days at exactly zero on the pipeline. Half the account's compute belongs to `COMPUTE_WH`, not to this project, and the entire serverless ingestion path cost 0.0005. Figures, the reconciliation against query time, and the correction of an earlier overstatement are in the cost section above | Closed |
 | ~~Account-level Resource Monitor~~ | **Answered on 2026-08-11: there was none, and now there is one.** Under `ACCOUNTADMIN`, `SHOW RESOURCE MONITORS` returned zero rows and `SHOW PARAMETERS LIKE 'RESOURCE_MONITOR' IN ACCOUNT` returned nothing, with `CDC_WH.resource_monitor` null. Zero rows under `CDC_ROLE` had been ambiguous; under `ACCOUNTADMIN` it was an answer. `cdc_poc_monitor` was created the same day at 09:54 and bound to the warehouse — note that it is a **warehouse-level** cap, so serverless consumption still has no ceiling | Closed |
 | ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither existed. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file that did not exist — consistent with it never having run. That script was written and executed for the first time on 2026-08-11; `cdc_trial_monitor` was never real | Closed |
 
