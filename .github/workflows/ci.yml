@@ -1,0 +1,133 @@
+# ci.yml — validação que roda de verdade, sem ambiente nenhum
+#
+# POR QUE ESTE ARQUIVO EXISTE
+#
+# O `deploy.yml` deste repositório nunca foi executado e, como está, não pode
+# ser (leia o cabeçalho dele). O efeito prático é que o projeto passou meses
+# sem nenhuma verificação automática — e a lista de defeitos encontrados só
+# ao rodar as coisas à mão é longa: dois arquivos referenciados que não
+# existiam, uma função `INFORMATION_SCHEMA.WAREHOUSES()` inventada, um script
+# de registro que usava POST e nunca atualizava nada.
+#
+# Este workflow não faz deploy. Ele verifica o que dá para verificar sem
+# Snowflake, sem Kafka e sem host de destino — que é bastante, e teria pegado
+# a maior parte daquela lista.
+#
+# `dbt parse` NÃO abre conexão com o Snowflake: gera o manifest a partir do
+# código. Por isso as credenciais abaixo são descartáveis de propósito. Isso
+# foi verificado localmente em 2026-08-11 antes de este arquivo ser escrito,
+# rodando `dbt parse` com valores falsos e uma chave gerada na hora.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Versões fixadas nas do container em dagster/Dockerfile. Se divergirem,
+      # o CI valida um projeto diferente do que roda em produção.
+      - name: Instalar dbt
+        run: pip install "dbt-snowflake==1.7.5"
+
+      - name: Sintaxe dos scripts shell
+        run: |
+          for f in scripts/*.sh; do
+            echo "bash -n $f"
+            bash -n "$f"
+          done
+
+      - name: YAML e JSON válidos
+        run: |
+          python - <<'PY'
+          import glob, json, sys, yaml
+          erros = 0
+          for f in glob.glob("**/*.yml", recursive=True) + glob.glob("**/*.yaml", recursive=True):
+              if "/target/" in f or "dbt_packages" in f:
+                  continue
+              try:
+                  yaml.safe_load(open(f))
+              except Exception as e:
+                  print(f"YAML inválido: {f}: {e}"); erros += 1
+          for f in glob.glob("connectors/*.json"):
+              try:
+                  json.load(open(f))
+              except Exception as e:
+                  print(f"JSON inválido: {f}: {e}"); erros += 1
+          sys.exit(1 if erros else 0)
+          PY
+
+      # Este passo é o que teria evitado o buraco mais caro do projeto: o
+      # deploy.yml referenciava `scripts/snowflake_setup.sql` e
+      # `docker-compose.prod.yml`, nenhum dos dois existente, e ninguém
+      # percebeu porque o workflow nunca rodou.
+      # Só linhas EXECUTÁVEIS dos workflows. Comentários e prosa ficam de fora
+      # de propósito: este repositório documenta arquivos ausentes no texto —
+      # o próprio `docker-compose.prod.yml` é citado em três lugares
+      # justamente para registrar que não existe. Varrer comentário
+      # transformaria documentação honesta em CI vermelho.
+      - name: Arquivos referenciados existem
+        run: |
+          python - <<'PY'
+          import glob, re, sys, os
+          padrao = re.compile(r'(?:scripts/[A-Za-z0-9_.-]+\.(?:sql|sh|py)|docker-compose[A-Za-z0-9_.-]*\.yml)')
+          faltando = {}
+          for fonte in glob.glob(".github/workflows/*.yml"):
+              for n, linha in enumerate(open(fonte, encoding="utf-8"), 1):
+                  if linha.lstrip().startswith("#"):
+                      continue
+                  for alvo in set(padrao.findall(linha)):
+                      if not os.path.exists(alvo):
+                          faltando.setdefault(alvo, []).append(f"{fonte}:{n}")
+          for alvo, onde in sorted(faltando.items()):
+              print(f"referenciado mas ausente: {alvo}  ({', '.join(onde)})")
+          sys.exit(1 if faltando else 0)
+          PY
+
+      - name: dbt deps e parse
+        env:
+          SNOWFLAKE_ACCOUNT: ci-dummy
+          SNOWFLAKE_USER: ci-dummy
+          SNOWFLAKE_ROLE: ci-dummy
+          SNOWFLAKE_DATABASE: ci-dummy
+          SNOWFLAKE_WAREHOUSE: ci-dummy
+          SNOWFLAKE_PRIVATE_KEY_PATH: /tmp/ci_dummy.p8
+          DBT_TARGET: dev
+        run: |
+          openssl genrsa 2048 2>/dev/null \
+            | openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -out /tmp/ci_dummy.p8
+          cd dbt
+          dbt deps --quiet
+          dbt parse --target dev
+
+      - name: Contagem de models e testes
+        env:
+          SNOWFLAKE_ACCOUNT: ci-dummy
+          SNOWFLAKE_USER: ci-dummy
+          SNOWFLAKE_ROLE: ci-dummy
+          SNOWFLAKE_DATABASE: ci-dummy
+          SNOWFLAKE_WAREHOUSE: ci-dummy
+          SNOWFLAKE_PRIVATE_KEY_PATH: /tmp/ci_dummy.p8
+        run: |
+          python - <<'PY'
+          import json
+          from collections import Counter
+          m = json.load(open("dbt/target/manifest.json"))
+          models = [n for n in m["nodes"].values() if n["resource_type"] == "model"]
+          testes = [n for n in m["nodes"].values() if n["resource_type"] == "test"]
+          camadas = Counter(n["fqn"][1] for n in models)
+          sev = Counter((n["config"].get("severity", "error")).lower() for n in testes)
+          print(f"models: {len(models)}  {dict(camadas)}")
+          print(f"testes: {len(testes)}  {dict(sev)}")
+          PY

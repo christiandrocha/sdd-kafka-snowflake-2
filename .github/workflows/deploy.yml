@@ -9,21 +9,37 @@
 # Dagster), não a correção de um placeholder existente (TD-18 assumia que
 # havia um passo de restart incompleto num arquivo que já existia).
 #
-# NÃO TESTADO — não há repositório GitHub real conectado durante esta
-# análise para validar que os secrets/ambiente batem. Revisar os nomes dos
-# GitHub Secrets antes do primeiro merge para main.
+# ── LEIA ANTES DE USAR (revisão de 2026-08-11) ───────────────────────────────
+#
+# ESTE WORKFLOW NÃO FAZ DEPLOY, e o problema não é um detalhe de configuração.
+# Ele roda `docker compose up` e faz `curl localhost:8083` dentro do runner do
+# GitHub, que é efêmero: a stack sobe na máquina do job e morre com ele. Nada
+# fica de pé em lugar nenhum. Um deploy de verdade precisa de um destino — SSH
+# para um host, um registry mais um orquestrador remoto, algo que sobreviva ao
+# fim do job — e esse destino não existe neste projeto.
+#
+# Três outros defeitos foram corrigidos nesta revisão, todos reais e todos
+# invisíveis enquanto o arquivo nunca rodou:
+#
+#   1. `SNOWFLAKE_PRIVATE_KEY` não era escrita no `.env`. O sink do Kafka e o
+#      `scripts/sync_metadata.py` leem essa variável; o `envsubst` do
+#      register_connectors.sh teria substituído string vazia e registrado o
+#      conector com chave em branco.
+#   2. `SNOWFLAKE_PRIVATE_KEY_PATH` apontava para `/run/secrets/rsa_key.p8`,
+#      um arquivo que nenhum passo criava.
+#   3. `docker-compose.prod.yml` era referenciado em dois passos e nunca
+#      existiu no repositório.
+#
+# O gatilho virou `workflow_dispatch`. Enquanto não houver destino real, este
+# arquivo é um esqueleto documentado, e é melhor que ele não dispare sozinho a
+# cada push fingindo que existe uma esteira.
+#
+# A validação que roda de verdade está em `ci.yml`, ao lado.
 
 name: Deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "connectors/**"
-      - "dbt/**"
-      - "dagster/**"
-      - "scripts/**"
-      - "docker-compose*.yml"
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -31,6 +47,19 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+
+      # O material da chave é gravado nos DOIS formatos que o projeto consome:
+      # o arquivo .p8, lido por dbt/Dagster via SNOWFLAKE_PRIVATE_KEY_PATH, e o
+      # corpo base64 PKCS8 DER numa variável, lido pelo connector do Snowflake
+      # e pelo sync_metadata.py. Faltar o segundo registra o sink com chave
+      # vazia — falha silenciosa, porque o Debezium continua saudável.
+      - name: Materializar a chave privada
+        run: |
+          mkdir -p "$RUNNER_TEMP/secrets"
+          printf '%s' "${{ secrets.SNOWFLAKE_PRIVATE_KEY_P8 }}" > "$RUNNER_TEMP/secrets/rsa_key.p8"
+          chmod 600 "$RUNNER_TEMP/secrets/rsa_key.p8"
+          test -s "$RUNNER_TEMP/secrets/rsa_key.p8" \
+            || { echo "secret SNOWFLAKE_PRIVATE_KEY_P8 vazio ou ausente"; exit 1; }
 
       - name: Configurar .env a partir dos secrets
         run: |
@@ -40,7 +69,8 @@ jobs:
           SNOWFLAKE_ROLE=${{ secrets.SNOWFLAKE_ROLE }}
           SNOWFLAKE_WAREHOUSE=${{ secrets.SNOWFLAKE_WAREHOUSE }}
           SNOWFLAKE_DATABASE=${{ secrets.SNOWFLAKE_DATABASE }}
-          SNOWFLAKE_PRIVATE_KEY_PATH=/run/secrets/rsa_key.p8
+          SNOWFLAKE_PRIVATE_KEY_PATH=$RUNNER_TEMP/secrets/rsa_key.p8
+          SNOWFLAKE_PRIVATE_KEY=${{ secrets.SNOWFLAKE_PRIVATE_KEY }}
           POSTGRES_DB=${{ secrets.POSTGRES_DB }}
           POSTGRES_USER=${{ secrets.POSTGRES_USER }}
           POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
@@ -50,7 +80,7 @@ jobs:
           EOF
 
       - name: Subir/atualizar stack
-        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+        run: docker compose up -d --build
 
       - name: Aguardar Kafka Connect saudável
         run: |
@@ -62,12 +92,15 @@ jobs:
             sleep 5
           done
 
+      # Sem `--env prod`: aquela flag faz o script procurar `.env.prod`
+      # (ENV_FILE=".env.${2}"), e o passo acima escreve `.env`. O script
+      # abortaria com "✖ .env.prod not found". Quinto defeito da revisão.
       - name: Registrar conectores
-        run: ./scripts/register_connectors.sh --env prod
+        run: ./scripts/register_connectors.sh
 
       - name: Reiniciar Dagster (daemon + webserver) — implementação real, não placeholder
         run: |
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml restart dagster-daemon dagster
+          docker compose restart dagster-daemon dagster
           # Confirma que o webserver voltou a responder antes de considerar sucesso.
           for i in $(seq 1 20); do
             if curl -sf http://localhost:3000/server_info > /dev/null; then

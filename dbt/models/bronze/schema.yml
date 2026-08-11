@@ -27,6 +27,49 @@ version: 2
 # ser "linha NAO apagada precisa ter esta coluna". Chave primaria e colunas de
 # controle ficam de fora do escopo de proposito: as duas continuam preenchidas
 # na linha de delete, entao ali o not_null vale sem ressalva.
+#
+# ── REVISAO DE SEVERIDADE (2026-08-11) ───────────────────────────────────────
+#
+# Os 83 testes desta camada foram revisados um a um contra a Decision 3 do
+# DESIGN_GOVERNANCA_QUALIDADE_DADOS, ratificada na mesma data. Ate entao eles
+# eram o unico bloco do projeto que nunca tinha passado pelo criterio: estavam
+# em `error` por omissao do default, nao por analise.
+#
+# CRITERIO: `error` quando a violacao corrompe dado ou deixa estado
+# inconsistente sem recuperacao segura -- na pratica, quando a violacao
+# propagada tornaria uma metrica de negocio objetivamente errada. `warn`
+# quando o dado esta degradado mas o sistema continua previsivel.
+#
+# RESULTADO: os 83 continuam em `error`, e NENHUMA severidade mudou. Isso nao
+# e preguica de revisao -- e o que sai de olhar para que serve cada coluna:
+#
+#   chave (event_id, order_id, uuid, ...)  -> e o unique_key do MERGE da Bronze
+#       e o PARTITION BY do resolve_cdc. Duplicada ou nula, a deduplicacao
+#       escolhe linha errada e a Silver inteira sai torta.
+#
+#   op                                     -> alimenta `op IS DISTINCT FROM 'd'`.
+#       Nulo ou com valor novo, um DELETE passa a valer como dado vivo.
+#
+#   source_ts_ms, kafka_offset             -> sao o ORDER BY da deduplicacao.
+#       Nulos, o desempate volta a ser nao deterministico -- exatamente o bug
+#       que a mudanca 1 do resolve_cdc corrigiu.
+#
+#   kafka_created_at                       -> e o watermark incremental de
+#       TODOS os 10 models desta camada (`MAX(kafka_created_at)` no filtro do
+#       is_incremental). Nulo, a deteccao de lote novo para de funcionar.
+#       Era o candidato obvio a `warn` por parecer metadado de observabilidade;
+#       e das colunas mais estruturais que existem aqui.
+#
+#   payload com escopo de delete           -> payment_id, user_key,
+#       restaurant_key, cpf, cnpj, event_name, event_type e os timestamps sao
+#       chave de juncao ou de agrupamento na Gold. Nulos, a linha some de uma
+#       agregacao em silencio, e metrica com linha faltando e metrica errada,
+#       nao metrica degradada.
+#
+# OBSERVACAO SEM ACAO: `event_timestamp` e derivado de `event_timestamp_ms` por
+# CAST no mesmo SELECT, entao o not_null dele so falha se o do ms falhar antes.
+# E redundante, nao incorreto -- fica registrado, sem remocao, porque redundancia
+# barata em teste de landing nao vale o risco de tirar a rede errada.
 
 models:
   - name: bronze_payment_events
