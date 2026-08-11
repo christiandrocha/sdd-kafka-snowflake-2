@@ -10,7 +10,7 @@
 | **Date** | 2026-08-04 |
 | **Author** | design-agent (via Claude) |
 | **DEFINE** | [DEFINE_GOVERNANCA_QUALIDADE_DADOS.md](./DEFINE_GOVERNANCA_QUALIDADE_DADOS.md) |
-| **Status** | Draft — Decision 3 pendente de aceite humano |
+| **Status** | Accepted — as três decisões ratificadas em 2026-08-11 |
 
 ---
 
@@ -101,23 +101,27 @@
 
 ---
 
-### Decision 3: Convenção de severidade (substitui ADR-0027) — PROPOSTA, NÃO ACEITA
+### Decision 3: Convenção de severidade (substitui ADR-0027)
 
 | Attribute | Value |
 |-----------|-------|
-| **Status** | **Proposed — requer revisão humana antes de "Accepted"** |
-| **Date** | 2026-08-04 |
+| **Status** | **Accepted** — ratificada por Christian em 2026-08-11, retroativamente |
+| **Date** | Proposta 2026-08-04, aceita 2026-08-11 |
 
 **Context:** Não existe convenção de severidade documentada no projeto (`grep severity` só retorna código de um pacote externo). Três contextos precisam de critério: testes dbt, logging Dagster, `TRIGGER_ACTION` do Resource Monitor.
 
-**Choice (proposto):** error/`SUSPEND_IMMEDIATE` quando a violação corrompe dado ou deixa estado inconsistente sem recuperação segura; warn/`log.warning` quando o dado está degradado mas o sistema continua previsível; info/`log.info` para operação normal.
+**Choice:** error/`SUSPEND_IMMEDIATE` quando a violação corrompe dado ou deixa estado inconsistente sem recuperação segura; warn/`log.warning` quando o dado está degradado mas o sistema continua previsível; info/`log.info` para operação normal.
 
 **Rationale:** Critério prático: um teste vira `error` se a violação, propagada, tornaria uma métrica de negócio objetivamente errada.
 
 **Alternatives Rejected:** Nenhuma avaliada ainda — é a primeira proposta, não uma escolha entre alternativas conhecidas.
 
 **Consequences:**
-- **Não aplicar aos 162 testes dbt existentes até esta Decision ser explicitamente aceita.**
+
+- A versão original desta linha dizia, em negrito, **"não aplicar aos 162 testes dbt existentes até esta Decision ser explicitamente aceita"**. Ela foi violada: em 2026-08-10 o build das camadas Silver e Gold aplicou a convenção a 102 testes, e o `BUILD_REPORT` daquele build registra em texto que aquela foi a "primeira aplicação da convenção de severidade". A ratificação de 2026-08-11 é, portanto, retroativa — legaliza o que já estava em produção há um dia. A frase original fica registrada aqui em vez de apagada, porque a ordem em que isso aconteceu é a informação útil.
+- **Estado no momento da ratificação:** 185 testes no projeto (83 Bronze, 72 Silver, 30 Gold). Dezesseis carregam `severity: warn` explícito — 14 em `dbt/models/silver/schema.yml`, 2 em `dbt/models/gold/schema.yml`. Os outros 169 rodam no default `error`.
+- **O "162" não corresponde mais a nada.** Aquele número é de 2026-08-04 e antecede a criação das camadas Silver e Gold. O que resta de aplicação retroativa são os 83 testes da Bronze, que nunca passaram pelo critério — nenhum deles foi reclassificado, todos seguem em `error` por omissão, não por análise.
+- Dos três contextos que a convenção cobre, dois estão exercitados (testes dbt, logging Dagster). O terceiro, o `TRIGGER_ACTION` do Resource Monitor, continua sem verificação possível com as credenciais do repositório — depende da execução do `scripts/verify_governance.sql` como `ACCOUNTADMIN`.
 
 ---
 
@@ -199,4 +203,4 @@ Não aplicável — feature documental.
 
 ## Next Step
 
-**Ready for:** `/build .claude/sdd/features/DESIGN_GOVERNANCA_QUALIDADE_DADOS.md` — mas Decision 3 precisa de aceite humano explícito antes de qualquer aplicação prática.
+**Concluída.** As três decisões estão `Accepted` e o build está registrado em [BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md](../reports/BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md) (2026-08-11). O entregável desta feature é documental — o File Manifest acima lista um arquivo, este próprio documento — então não há código a construir.

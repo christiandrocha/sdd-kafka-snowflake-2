@@ -110,7 +110,7 @@ MERGE não apaga linha. Num incremental, uma chave deletada na origem sobreviver
 
 `error` para invariante garantida pelo código deste repositório; `warn` para integridade referencial entre domínios. O motivo do `warn` é concreto: os dez fluxos CDC são independentes e têm tempos de snapshot próprios, então um pedido chegar antes do entregador dele é latência normal, não defeito.
 
-**Esta decisão está aplicada em 102 testes mas NÃO foi ratificada.** A Decision 3 do `DESIGN_GOVERNANCA_QUALIDADE_DADOS` segue marcada como *"Proposed — requer revisão humana antes de Accepted"*. É a pendência mais relevante deste build.
+**Ratificada em 2026-08-11, um dia depois de já estar aplicada.** Quando este relatório foi escrito, a Decision 3 do `DESIGN_GOVERNANCA_QUALIDADE_DADOS` estava marcada como *"Proposed — requer revisão humana antes de Accepted"* e trazia, em negrito, a instrução de não aplicá-la antes do aceite. Este build aplicou assim mesmo, a 102 testes. A ratificação foi retroativa e está registrada em [BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md](BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md).
 
 ### D6 — Defesa contra fan-out na Gold
 
@@ -196,12 +196,13 @@ Nenhum é defeito do pipeline. Todos foram rastreados até a base de origem.
 
 | Pendência | Ação necessária | Quem decide |
 |-----------|-----------------|-------------|
-| Convenção de severidade não ratificada (D5) | Aceitar ou revisar a Decision 3 do `DESIGN_GOVERNANCA_QUALIDADE_DADOS`; hoje está aplicada em 102 testes | Christian |
-| `DEFINE` e `DESIGN` ausentes desta feature | Escrever retroativamente ou aceitar a dívida explicitamente | Christian |
-| `BUILD_REPORT` do `GOVERNANCA_QUALIDADE_DADOS` | Aquela feature tem DEFINE e DESIGN e nunca foi construída | Christian |
-| Cardinalidade de `payment_id` | Decidir se vale gerar dados novos antes de usar os 3 models de pagamento | Christian |
-| MERGE incremental com dado novo | Só o caminho no-op foi exercitado; falta um `INSERT` em `payment_events` para provar a atualização de um pagamento existente | — |
+| ~~Convenção de severidade não ratificada (D5)~~ | **Resolvida em 2026-08-11.** Decision 3 ratificada retroativamente; as 16 marcações `warn` ficam como estão. Aberto: os 83 testes Bronze nunca passaram pelo critério | Christian |
+| ~~`DEFINE` e `DESIGN` ausentes desta feature~~ | **Resolvida em 2026-08-11: dívida aceita explicitamente.** Não serão escritos retroativamente — um `DEFINE` redigido depois do build descreveria o que foi construído, não o que foi prometido | Christian |
+| ~~`BUILD_REPORT` do `GOVERNANCA_QUALIDADE_DADOS`~~ | **Resolvida em 2026-08-11.** Aquela feature é 100% documental: o entregável já existia, faltava o registro de fase 3. Ver [BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md](BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md) | Christian |
+| ~~Cardinalidade de `payment_id`~~ | **Resolvida em 2026-08-11: aceita como andaime.** Os 3 models de pagamento ficam marcados no `schema.yml` como estruturalmente corretos e sem significado de negócio nesta base | Christian |
+| ~~MERGE incremental com dado novo~~ | **Resolvida em 2026-08-11.** Evento `closed` inserido no Postgres percorreu Debezium, Kafka e sink; `gold_payment_lifecycle` devolveu `SUCCESS 1` com a tabela parada em 8 linhas — update, não insert | — |
 | CI/CD | Nunca executado; referencia `docker-compose.prod.yml` e `scripts/snowflake_setup.sql`, ambos ausentes | Christian |
+| Ordenação no CTE `alvo` | Descoberta em 2026-08-11: evento cujo `timestamp` seja anterior ao evento mais novo de **outro** pagamento é ignorado, porque o watermark é global | Christian |
 
 ---
 
