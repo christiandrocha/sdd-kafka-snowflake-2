@@ -20,6 +20,8 @@ models:
   - name: gold_payment_lifecycle
     description: >
       Uma linha por pagamento, com o instante de cada etapa do ciclo pivotado em coluna. Modelo de referencia do padrao aditivo-particionavel: incremental por payment_id, recalculando cada pagamento afetado por inteiro.
+
+      ANDAIME (aceito em 2026-08-11): estruturalmente correto, sem significado de negocio nesta base. Os 2.211 eventos se distribuem em 8 payment_id, sete deles com mais de 300 eventos cada -- o gerador sintetico reaproveitou identificadores, e nao existe pagamento real com 322 eventos de ciclo de vida. As duracoes que este model calcula sao artefato do gerador. Nenhum numero daqui vai para decisao ou demonstracao sem regenerar o seed.
     columns:
       - name: payment_id
         description: "Grao do modelo. Cardinalidade degenerada nos dados atuais: 8 valores distintos para 2.210 eventos."
@@ -36,6 +38,8 @@ models:
   - name: gold_payments_by_status
     description: >
       Volume por etapa do ciclo de pagamento. Razao global (o percentual depende do total), materializada como incremental apenas para estabilizar a identidade das 7 linhas via MERGE.
+
+      ANDAIME (aceito em 2026-08-11): a distribuicao por etapa vem de 8 payment_id sinteticos com centenas de eventos cada. Os percentuais sao aritmeticamente corretos e comercialmente vazios. Ver a nota em gold_payment_lifecycle.
     columns:
       - name: event_name
         description: "Grao do modelo -- uma linha por etapa."
@@ -55,6 +59,8 @@ models:
   - name: gold_payment_funnel
     description: >
       Funil do ciclo de pagamento com conversao em relacao ao topo e a etapa anterior. Full refresh por necessidade aritmetica -- nao ha recorte incremental que produza percentual correto.
+
+      ANDAIME (aceito em 2026-08-11): as taxas de conversao derivam de 8 payment_id sinteticos que percorreram o ciclo centenas de vezes. A forma do funil e artefato do gerador, nao comportamento de pagamento. Ver a nota em gold_payment_lifecycle.
     columns:
       - name: ordem
         description: "Posicao declarada da etapa no funil. Declarada, nao inferida: ordem alfabetica poria authorized antes de created."
