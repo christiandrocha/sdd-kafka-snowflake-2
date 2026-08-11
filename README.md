@@ -172,7 +172,7 @@ Measured on 2026-08-10, across six hours that included building all three layers
 
 That figure is query time. The invoice for the same day, read from `ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY` as `ACCOUNTADMIN` on 2026-08-11, was **1.1188 credits** — fifty-six times more. Both numbers are correct and they measure different things: one is time spent executing, the other is time spent switched on. At the nominal X-Small rate that billed day is a little over an hour of warehouse uptime to run 72.7 seconds of queries, so **execution accounts for under 2% of what was actually paid.** Everything else is the 60-second minimum and the idle tail before auto-suspend. It is the sharpest available evidence for the argument below, and it was invisible until someone with `ACCOUNTADMIN` looked.
 
-Whole-account consumption since the account was created on 2026-08-06:
+`CDC_WH` consumption since the account was created on 2026-08-06 — this is one warehouse, not the account:
 
 | Day | Credits |
 |---|---|
@@ -183,7 +183,9 @@ Whole-account consumption since the account was created on 2026-08-06:
 | 2026-08-11 | 0.1954 |
 | **Total** | **≈ 1.72** |
 
-The two missing days are the important ones. Nobody worked that weekend, the stack was up, and the account billed nothing at all — which turns "at rest, this pipeline costs zero credits" from a claim about sensor behaviour into a measured fact about the invoice. The near-real-time cross-check in `INFORMATION_SCHEMA` agreed with the billed figures to four decimal places for the current day, so `ACCOUNT_USAGE` is not lagging here.
+The two missing days are the important ones. Nobody worked that weekend, the stack was up, and the warehouse billed nothing at all — which turns "at rest, this pipeline costs zero credits" from a claim about sensor behaviour into a measured fact about the invoice. The near-real-time cross-check in `INFORMATION_SCHEMA` agreed with the billed figures to four decimal places for the current day, so `ACCOUNT_USAGE` is not lagging here.
+
+**Treat 1.72 as a floor, not a total.** `WAREHOUSE_METERING_HISTORY` reports warehouse compute for `CDC_WH` and nothing else. Snowpipe Streaming — which is how the Kafka sink writes every row into Bronze — bills as a serverless service in separate views, as do Tasks that run without a warehouse and the cloud-services layer. None of that was measured on 2026-08-11, and none of it is visible to `CDC_ROLE`. For a pipeline whose entire ingestion path is serverless, the unmeasured part is not a rounding error.
 
 One caveat on the rate. `CDC_WH` reports `resource_constraint = STANDARD_GEN_2`, a second-generation warehouse, and the "1 credit/hour" above is the classic X-Small rate. Anything in this section derived from that rate — the uptime figure in particular — should be re-checked against Snowflake's current rate card before being quoted to anyone. The credit totals themselves come straight from the billing view and do not depend on it.
 
