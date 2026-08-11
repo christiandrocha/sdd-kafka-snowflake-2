@@ -154,7 +154,7 @@ Both Dagster sensors (`bronze_new_data_sensor` and `registry_new_subject_sensor`
 Sensor bronze_new_data_sensor skipped: Sem atividade no Kafka (via Prometheus) — Snowflake não consultado.
 ```
 
-At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables and — pending verification, see below — an account-level Resource Monitor, both auditable through `scripts/verify_governance.sql`.
+At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables — verified on 2026-08-11, though inherited from defaults rather than configured, see below — and by an account-level Resource Monitor that is still unverified. Both are audited by `scripts/verify_governance.sql`.
 
 ### What it actually costs
 
@@ -387,7 +387,10 @@ The three service identities under `keys/` hold exactly one role each — `DAGST
 | Billed credit consumption | **Unknown.** `SNOWFLAKE.ACCOUNT_USAGE` is not authorized for `CDC_ROLE`; the `INFORMATION_SCHEMA` metering function runs but returns no rows | `scripts/verify_governance.sql` step 4, as `ACCOUNTADMIN` |
 | Account-level Resource Monitor | **Unknown.** The warehouse's own `resource_monitor` field is null, so any protection would have to be account-level. `SHOW RESOURCE MONITORS` returns zero rows under `CDC_ROLE` — and zero rows there is indistinguishable from "none exists", which is the trap the script now warns about | `verify_governance.sql` steps 1 and 2, as `ACCOUNTADMIN` |
 | The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`) | **Open** since the script was written | Same run resolves it |
-| 1-day Time Travel on Bronze | **Asserted, never checked** in this session | `SHOW TABLES IN SCHEMA CDC_POC.BRONZE` and read `retention_time` |
+
+A fourth claim used to sit in this table and has left it. The 1-day Time Travel on Bronze was checked on 2026-08-11 with `SHOW TABLES IN SCHEMA CDC_POC.BRONZE` under `CDC_ROLE_RO` — it never needed `ACCOUNTADMIN`, and listing it as blocked was an error. All 20 objects in the schema report `retention_time = 1`: the 10 landing tables written by the connector and the 10 transient `BRONZE_*` tables built by dbt.
+
+The number is right, but it was never a design decision. dbt-snowflake materializes tables as `TRANSIENT` by default, and 1 day is the maximum a transient table can hold; the permanent landing tables sit at the account default. Nothing in `dbt_project.yml` sets a retention. The guarantee is real today and would change silently if either default moved.
 
 ### Untested code paths
 
