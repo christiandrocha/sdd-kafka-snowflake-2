@@ -170,6 +170,23 @@ Measured on 2026-08-10, across six hours that included building all three layers
 579 queries · 72.7 seconds of execution time  ≈ 0.02 credits of pure compute
 ```
 
+That figure is query time. The invoice for the same day, read from `ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY` as `ACCOUNTADMIN` on 2026-08-11, was **1.1188 credits** — fifty-six times more. Both numbers are correct and they measure different things: one is time spent executing, the other is time spent switched on. At the nominal X-Small rate that billed day is a little over an hour of warehouse uptime to run 72.7 seconds of queries, so **execution accounts for under 2% of what was actually paid.** Everything else is the 60-second minimum and the idle tail before auto-suspend. It is the sharpest available evidence for the argument below, and it was invisible until someone with `ACCOUNTADMIN` looked.
+
+Whole-account consumption since the account was created on 2026-08-06:
+
+| Day | Credits |
+|---|---|
+| 2026-08-06 | 0.0252 |
+| 2026-08-07 | 0.3846 |
+| 2026-08-08 and 2026-08-09 | **absent from the results — zero** |
+| 2026-08-10 | 1.1188 |
+| 2026-08-11 | 0.1954 |
+| **Total** | **≈ 1.72** |
+
+The two missing days are the important ones. Nobody worked that weekend, the stack was up, and the account billed nothing at all — which turns "at rest, this pipeline costs zero credits" from a claim about sensor behaviour into a measured fact about the invoice. The near-real-time cross-check in `INFORMATION_SCHEMA` agreed with the billed figures to four decimal places for the current day, so `ACCOUNT_USAGE` is not lagging here.
+
+One caveat on the rate. `CDC_WH` reports `resource_constraint = STANDARD_GEN_2`, a second-generation warehouse, and the "1 credit/hour" above is the classic X-Small rate. Anything in this section derived from that rate — the uptime figure in particular — should be re-checked against Snowflake's current rate card before being quoted to anyone. The credit totals themselves come straight from the billing view and do not depend on it.
+
 Full project, end to end:
 
 | | 4 threads | 8 threads |
@@ -384,13 +401,13 @@ Run manually through SnowSQL or a worksheet — deliberately **not** automated, 
 
 Everything below is either untested or waiting on a human decision. It is listed here rather than left implicit, because the expensive failures on this project have all come from something nobody had run yet.
 
-### Cannot be verified with the credentials in this repository
+### Closed on 2026-08-11 by one `ACCOUNTADMIN` run
 
-The three service identities under `keys/` hold exactly one role each — `DAGSTER_SERVICE_USER` and `DATA_AGENTS_MCP_USER` on `CDC_ROLE`, `CURSOR_MCP_USER` on `CDC_ROLE_RO`. None can assume `ACCOUNTADMIN`, so the following need a human on a Snowflake worksheet:
+The three service identities under `keys/` hold exactly one role each — `DAGSTER_SERVICE_USER` and `DATA_AGENTS_MCP_USER` on `CDC_ROLE`, `CURSOR_MCP_USER` on `CDC_ROLE_RO`. None can assume `ACCOUNTADMIN`, which is why these three sat unanswered for a week. A single execution of `scripts/verify_governance.sql` on a human's worksheet closed all of them, and the most consequential answer was the one nobody expected: the cost guardrail the project documented does not exist.
 
 | Claim | Status | How to close it |
 |---|---|---|
-| Billed credit consumption | **Unknown.** `SNOWFLAKE.ACCOUNT_USAGE` is not authorized for `CDC_ROLE`; the `INFORMATION_SCHEMA` metering function runs but returns no rows | `scripts/verify_governance.sql` step 4, as `ACCOUNTADMIN` |
+| ~~Billed credit consumption~~ | **Answered on 2026-08-11: ≈ 1.72 credits since the account was created**, across four days with activity and two consecutive days at exactly zero. Figures and the reconciliation against query time are in the cost section above | Closed |
 | ~~Account-level Resource Monitor~~ | **Answered on 2026-08-11: there is none.** Under `ACCOUNTADMIN`, `SHOW RESOURCE MONITORS` returned zero rows and `SHOW PARAMETERS LIKE 'RESOURCE_MONITOR' IN ACCOUNT` returned nothing, with `CDC_WH.resource_monitor` null. Zero rows under `CDC_ROLE` had been ambiguous; under `ACCOUNTADMIN` it is an answer | Closed |
 | ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither exists. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file absent from this repository — consistent with it never having run | Closed |
 
