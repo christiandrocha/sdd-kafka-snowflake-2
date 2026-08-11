@@ -163,7 +163,9 @@ At rest, running this pipeline costs zero credits. The design is completed by 1-
 
 **Both of those became true on 2026-08-11, and neither was true before.** For a week this section claimed an account-level Resource Monitor that did not exist. Running `scripts/verify_governance.sql` as `ACCOUNTADMIN` settled it: `SHOW RESOURCE MONITORS` returned zero rows, the account parameter was unset, and the warehouse's own field was null. All three places a spending cap could live were empty. The monitor described above was then created by `scripts/snowflake_setup.sql` — a file the README had referenced for just as long without it existing either.
 
-One caveat on the alerts. `NOTIFY_USERS` is still unset, and it only delivers to users with a **verified** email; the three service identities have none. Until a human login is added there, the two notification triggers are decorative and the first signal the account gives is the warehouse suspending at 90%.
+The alerts became real on 2026-08-11. `NOTIFY_USERS` now points at the account's human login, whose email reports `IS_EMAIL_VERIFIED = true` — and that second condition is the one that matters, because `NOTIFY_USERS` only delivers to verified addresses. The three service identities have no email at all, so listing them would have been silently useless.
+
+The ordering here is a trap worth naming. Setting `NOTIFY_USERS` against an unverified address is accepted without error: the monitor looks configured, and nothing is delivered. That is worse than leaving it unset, because it manufactures confidence. Verify first — only Snowsight triggers verification, while `ALTER USER … SET EMAIL` fills the field and leaves `IS_EMAIL_VERIFIED` false. Until this was done, the 50% and 75% triggers were decorative and the first signal this account gave was the warehouse suspending at 90%.
 
 The same run surfaced something nobody had looked at: **both** warehouses have `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute, switched on by default rather than by decision. `QUERY_ACCELERATION_HISTORY` was then checked over 30 days and returned **nothing** — it has never engaged once, anywhere, which is what the scan sizes here predict. It is a cost path with no demonstrated benefit.
 
@@ -495,7 +497,7 @@ Half of that fragility is now gone. `scripts/snowflake_setup.sql` set `DATA_RETE
 | Path | Why it matters |
 |---|---|
 | `deploy.yml` | Ran 9 times, failed 9 times, unnoticed for four days — and is undeployable by design, since it targets the ephemeral runner. Four smaller defects fixed on 2026-08-11; trigger is now manual-only. A real one needs a deployment target this project does not have — see [CI/CD](#cicd) |
-| Nobody watches the workflow status | The nine red runs are the evidence. `ci.yml` is only useful if someone reads it; a failing check that no one opens is indistinguishable from no check at all |
+| Nobody watches the workflow status | The nine red runs are the evidence. `ci.yml` is only useful if someone reads it; a failing check that no one opens is indistinguishable from no check at all. The credit monitor now emails before it acts, which was the one half of this with a technical fix — GitHub Actions still notifies nobody |
 
 The incremental MERGE used to head this table and was closed on 2026-08-11. A single `closed` event for payment `55555555-5555-5555-5555-555555555555` was inserted into `payment_events` in Postgres and left to travel the real path — Debezium, Kafka, the Snowflake sink — landing with `__OP = 'c'`. The chain then ran end to end: `gold_payment_lifecycle` reported `SUCCESS 1` and the table stayed at 8 rows, so the row was updated, not inserted. `total_eventos` went 2 → 3, `foi_fechado` false → true, `fechado_em` and `segundos_ate_fechamento` filled in. All 34 tests in the selection passed.
 
