@@ -103,12 +103,19 @@ ALTER WAREHOUSE CDC_WH SET RESOURCE_MONITOR = cdc_poc_monitor;
 -- (verificado no DESC USER de 2026-08-11), então não adianta listá-los: o
 -- monitor suspende no gatilho de 90% sem nunca ter avisado nos de 50 e 75.
 --
--- Troque pelo login humano da conta e confirme o e-mail antes:
--- ALTER RESOURCE MONITOR cdc_poc_monitor SET NOTIFY_USERS = ('CHRISTIANDROCHA');
+-- O modo de falha aqui é pior que não configurar nada: o comando é aceito sem
+-- erro com e-mail não verificado, o monitor fica com cara de configurado, e
+-- você só descobre que não há aviso quando o warehouse suspende em 90%.
+--
+-- Numa conta nova, verifique o e-mail ANTES desta linha -- Snowsight, canto
+-- inferior esquerdo, My profile, e clique no link que chega por e-mail. Só o
+-- Snowsight dispara a verificação; `ALTER USER ... SET EMAIL` preenche o
+-- campo e deixa IS_EMAIL_VERIFIED em false.
+ALTER RESOURCE MONITOR cdc_poc_monitor SET NOTIFY_USERS = ('CHRISTIANDROCHA');
 
--- Confere se o e-mail do usuário humano está verificado. Se
--- IS_EMAIL_VERIFIED vier false, o NOTIFY é decorativo.
--- DESC USER CHRISTIANDROCHA;
+-- Confirma antes de confiar no aviso. IS_EMAIL_VERIFIED = true no usuário
+-- listado acima é a única evidência de que o NOTIFY não é decorativo.
+DESC USER CHRISTIANDROCHA;
 
 
 -- ── 3. Time Travel explícito ─────────────────────────────────────────────
