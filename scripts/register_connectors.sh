@@ -74,21 +74,42 @@ for i in $(seq 1 40); do
 done
 
 # ── Register connector ────────────────────────────────────────────────────────
+# PUT /connectors/{name}/config, não POST /connectors.
+#
+# A versão anterior usava POST, que só CRIA. Num conector já existente ela
+# recebia HTTP 409, imprimia "already exists" e seguia — ou seja, rodar este
+# script depois de mudar `connectors/*.json` ou qualquer variável do `.env`
+# não propagava nada. A config velha continuava valendo no config topic do
+# Connect, em silêncio.
+#
+# Isso não era teoria: em 2026-08-11, depois da rotação da chave do
+# DAGSTER_SERVICE_USER, os 4 tasks do sink ficaram em FAILED com "JWT token is
+# invalid" — a chave antiga estava embutida na config registrada. Rodar este
+# script "para corrigir" devolveu 409 duas vezes e declarou sucesso com o sink
+# quebrado. O conserto real foi um PUT manual.
+#
+# PUT é idempotente: cria se não existe, atualiza se existe. É o verbo certo
+# para um script de registro que também serve de script de atualização.
+#
+# NOTA SOBRE O CORPO: POST /connectors recebe {"name": ..., "config": {...}};
+# PUT /connectors/{name}/config recebe SÓ o objeto de config. Daí a extração
+# do campo `config` abaixo.
 register_connector() {
     local name="$1" file="$2"
-    echo -e "\n${YELLOW}📡  Registering: ${name}${RESET}"
+    echo -e "\n${YELLOW}📡  Registering/updating: ${name}${RESET}"
 
-    RESOLVED=$(envsubst < "$file")
+    RESOLVED=$(envsubst < "$file" | python3 -c \
+        "import sys, json; d = json.load(sys.stdin); print(json.dumps(d.get('config', d)))")
 
     # Sem -f: o código HTTP é sempre capturado explicitamente pelo -w,
     # independente do status. Não dependemos do exit code do curl.
     HTTP=$(echo "$RESOLVED" | curl -s -o /tmp/connect_resp.json -w "%{http_code}" \
-        -X POST "${CONNECT_URL}/connectors" \
+        -X PUT "${CONNECT_URL}/connectors/${name}/config" \
         -H "Content-Type: application/json" -d @-) || true
 
     case "$HTTP" in
         201) echo -e "${GREEN}✅  ${name} created (HTTP 201)${RESET}" ;;
-        409) echo -e "${YELLOW}⚠️   ${name} already exists (HTTP 409)${RESET}" ;;
+        200) echo -e "${GREEN}✅  ${name} updated (HTTP 200)${RESET}" ;;
         *)   echo -e "${RED}✖   Failed ${name} (HTTP ${HTTP})${RESET}"
              cat /tmp/connect_resp.json 2>/dev/null; exit 1 ;;
     esac
@@ -101,17 +122,41 @@ register_connector "sink"                   "${CONNECTORS_DIR}/snowflake_sink.js
 echo -e "\n${YELLOW}⏳  Waiting for connectors to stabilize (15s)...${RESET}"
 sleep 15
 
+# O estado do CONECTOR não basta: um conector pode reportar RUNNING com todos
+# os tasks em FAILED. Foi assim que o sink quebrado passou despercebido em
+# 2026-08-11 -- e é o modo de falha mais traiçoeiro aqui, porque o Debezium
+# segue saudável e metade do pipeline parece viva enquanto nada chega ao
+# destino.
 echo -e "\n${CYAN}── Connector status ──────────────────────────────────────${RESET}"
+UNHEALTHY=0
 for connector in debezium-postgres-cdc sink; do
-    STATUS=$(curl -sf "${CONNECT_URL}/connectors/${connector}/status" \
-        | python3 -c "import sys,json; print(json.load(sys.stdin)['connector']['state'])" 2>/dev/null || echo "UNKNOWN")
-    [ "$STATUS" = "RUNNING" ] \
-        && echo -e "  ${GREEN}✅  ${connector}: ${STATUS}${RESET}" \
-        || echo -e "  ${RED}✖   ${connector}: ${STATUS}${RESET}"
+    REPORT=$(curl -sf "${CONNECT_URL}/connectors/${connector}/status" \
+        | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+tasks = d.get('tasks', [])
+bad = [t for t in tasks if t.get('state') != 'RUNNING']
+ok = d['connector']['state'] == 'RUNNING' and not bad and tasks
+print(('OK' if ok else 'BAD'),
+      d['connector']['state'],
+      f\"{len(tasks) - len(bad)}/{len(tasks)} tasks\",
+      (bad[0].get('trace','').splitlines() or [''])[0][:90] if bad else '')
+" 2>/dev/null || echo "BAD UNKNOWN 0/0 sem resposta do Connect")
+
+    case "$REPORT" in
+        OK*)  echo -e "  ${GREEN}✅  ${connector}: ${REPORT#OK }${RESET}" ;;
+        *)    echo -e "  ${RED}✖   ${connector}: ${REPORT#BAD }${RESET}"; UNHEALTHY=1 ;;
+    esac
 done
 
+if [ "$UNHEALTHY" -ne 0 ]; then
+    echo -e "\n${RED}✖   Registro concluído, mas há conector ou task fora de RUNNING.${RESET}"
+    echo -e "${GRAY}    Detalhes: ${CONNECT_URL}/connectors/{nome}/status${RESET}\n"
+    exit 1
+fi
+
 echo -e "\n${CYAN}══════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}  All connectors registered! (10 domains → 2 connectors)${RESET}\n"
+echo -e "${GREEN}  All connectors registered and healthy! (10 domains → 2 connectors)${RESET}\n"
 echo -e "  ${GRAY}Kafka UI    →${RESET} http://localhost:8080"
 echo -e "  ${GRAY}Connect     →${RESET} http://localhost:8083/connectors"
 echo -e "  ${GRAY}Registry    →${RESET} http://localhost:8081/subjects"
