@@ -374,6 +374,7 @@ Run manually through SnowSQL or a worksheet — deliberately **not** automated, 
 | `scripts/bootstrap_config.sql` | Creates the `CONFIG` schema and seeds `TABLE_METADATA` |
 | `scripts/streams_and_tasks.sql` | Streams and Tasks feeding the sensors |
 | `scripts/create_readonly_role.sql` | Read-only role for external tooling |
+| `scripts/snowflake_setup.sql` | Creates `cdc_poc_monitor` and pins Time Travel. **Never executed** |
 | `scripts/verify_governance.sql` | Audits Resource Monitor, Time Travel and consumption |
 | `scripts/sync_metadata.py` | Syncs Schema Registry → `TABLE_METADATA` |
 | `scripts/init.sql` | Source Postgres initialization |
@@ -393,7 +394,7 @@ Run manually through SnowSQL or a worksheet — deliberately **not** automated, 
 
 `.github/workflows/deploy.yml` triggers on pushes to `main` that touch `connectors/`, `dbt/` or the compose files, and assembles `.env` from GitHub Secrets.
 
-**It has never run against a real environment.** Before first use, note that it still references two files absent from the repository: `docker-compose.prod.yml` and `scripts/snowflake_setup.sql`.
+**It has never run against a real environment.** One of the two files it referenced without them existing, `scripts/snowflake_setup.sql`, was written on 2026-08-11; `docker-compose.prod.yml` is still absent. The workflow does not execute either — the governance step deliberately prints instructions for a human to run them on a worksheet, because account-level changes should not fire on every push to `main`.
 
 ---
 
@@ -409,7 +410,7 @@ The three service identities under `keys/` hold exactly one role each — `DAGST
 |---|---|---|
 | ~~Billed credit consumption~~ | **Answered on 2026-08-11: ≈ 1.72 credits since the account was created**, across four days with activity and two consecutive days at exactly zero. Figures and the reconciliation against query time are in the cost section above | Closed |
 | ~~Account-level Resource Monitor~~ | **Answered on 2026-08-11: there is none.** Under `ACCOUNTADMIN`, `SHOW RESOURCE MONITORS` returned zero rows and `SHOW PARAMETERS LIKE 'RESOURCE_MONITOR' IN ACCOUNT` returned nothing, with `CDC_WH.resource_monitor` null. Zero rows under `CDC_ROLE` had been ambiguous; under `ACCOUNTADMIN` it is an answer | Closed |
-| ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither exists. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file absent from this repository — consistent with it never having run | Closed |
+| ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither exists. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file that did not exist — consistent with it never having run. That script was written on 2026-08-11 and is still waiting on its first execution | Closed |
 
 A fourth claim used to sit in this table and has left it. The 1-day Time Travel on Bronze was checked on 2026-08-11 with `SHOW TABLES IN SCHEMA CDC_POC.BRONZE` under `CDC_ROLE_RO` — it never needed `ACCOUNTADMIN`, and listing it as blocked was an error. All 20 objects in the schema report `retention_time = 1`: the 10 landing tables written by the connector and the 10 transient `BRONZE_*` tables built by dbt.
 
@@ -419,7 +420,7 @@ The number is right, but it was never a design decision. dbt-snowflake materiali
 
 | Path | Why it matters |
 |---|---|
-| CI/CD (`.github/workflows/deploy.yml`) | Never executed against any environment, and still references two files absent from the repository: `docker-compose.prod.yml` and `scripts/snowflake_setup.sql` |
+| CI/CD (`.github/workflows/deploy.yml`) | Never executed against any environment. `scripts/snowflake_setup.sql` now exists; `docker-compose.prod.yml` is still missing |
 
 The incremental MERGE used to head this table and was closed on 2026-08-11. A single `closed` event for payment `55555555-5555-5555-5555-555555555555` was inserted into `payment_events` in Postgres and left to travel the real path — Debezium, Kafka, the Snowflake sink — landing with `__OP = 'c'`. The chain then ran end to end: `gold_payment_lifecycle` reported `SUCCESS 1` and the table stayed at 8 rows, so the row was updated, not inserted. `total_eventos` went 2 → 3, `foi_fechado` false → true, `fechado_em` and `segundos_ate_fechamento` filled in. All 34 tests in the selection passed.
 
