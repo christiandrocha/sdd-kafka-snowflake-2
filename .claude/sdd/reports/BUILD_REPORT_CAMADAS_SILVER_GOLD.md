@@ -202,7 +202,8 @@ Nenhum é defeito do pipeline. Todos foram rastreados até a base de origem.
 | ~~Cardinalidade de `payment_id`~~ | **Resolvida em 2026-08-11: aceita como andaime.** Os 3 models de pagamento ficam marcados no `schema.yml` como estruturalmente corretos e sem significado de negócio nesta base | Christian |
 | ~~MERGE incremental com dado novo~~ | **Resolvida em 2026-08-11.** Evento `closed` inserido no Postgres percorreu Debezium, Kafka e sink; `gold_payment_lifecycle` devolveu `SUCCESS 1` com a tabela parada em 8 linhas — update, não insert | — |
 | CI/CD | Nunca executado; referencia `docker-compose.prod.yml` e `scripts/snowflake_setup.sql`, ambos ausentes | Christian |
-| Ordenação no CTE `alvo` | Descoberta em 2026-08-11: evento cujo `timestamp` seja anterior ao evento mais novo de **outro** pagamento é ignorado, porque o watermark é global | Christian |
+| ~~Ordenação no CTE `alvo`~~ | **Corrigida em 2026-08-11.** O watermark global virou comparação por pagamento, por contagem antes de timestamp. Bug reproduzido antes da correção com dado real: um `captured` fora de ordem entrou na Bronze e na Silver (`SUCCESS 1` nas duas) e a Gold devolveu `SUCCESS 0`, ficando com 3 eventos contra 4 na Silver — com os 26 testes da cadeia passando. Depois da correção, `SUCCESS 1`, `total_eventos` 3→4, `capturado_em` preenchido, e `SUCCESS 0` na reexecução | — |
+| ~~`register_connectors.sh` não atualizava nada~~ | **Corrigido em 2026-08-11**, descoberto no meio da correção acima. Usava `POST /connectors`, recebia 409 em conector existente e seguia — mudança em `connectors/*.json` ou no `.env` nunca propagava. Agora usa `PUT /connectors/{nome}/config`. A checagem final também passou a olhar task por task e a sair com código de erro: o script declarava sucesso em verde com os 4 tasks do sink em `FAILED` | — |
 
 ---
 
