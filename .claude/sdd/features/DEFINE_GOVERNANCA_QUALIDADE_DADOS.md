@@ -9,8 +9,8 @@
 | **Feature** | GOVERNANCA_QUALIDADE_DADOS |
 | **Date** | 2026-08-04 |
 | **Author** | Christian (via Claude) |
-| **Status** | Draft — convenção de severidade ainda não confirmada por você |
-| **Clarity Score** | 11/15 |
+| **Status** | Accepted — convenção de severidade ratificada em 2026-08-11 |
+| **Clarity Score** | 11/15 — **abaixo do gate de 12/15 da fase Define**, ver nota |
 
 ---
 
@@ -117,9 +117,20 @@ Várias partes do pipeline dependem de premissas não documentadas (Bronze é ap
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | 2026-08-04 | Christian (via Claude) | Versão inicial, traduzida das ADRs 0025, 0026, 0027 do v5-delivery |
+| 1.1 | 2026-08-11 | Christian | Status para Accepted; nota sobre o gate de clareza |
+
+---
+
+## Nota sobre o gate de clareza (2026-08-11)
+
+O Clarity Score deste documento é 11/15. O quality gate da fase Define, em `.claude/sdd/_index.md`, é **≥ 12/15**. O documento não passou no próprio portão e mesmo assim gerou um `DESIGN`, que gerou a convenção de severidade da Decision 3, que foi aplicada a 102 testes dbt em produção.
+
+Isso ficou sem registro por uma semana. A cadeia inteira — Define reprovado, Design derivado dele, convenção aplicada antes da ratificação — foi construída abaixo da linha de corte que o próprio repositório publica. Nenhum passo isolado causou dano: as três decisões se sustentam, e a convenção de severidade se mostrou correta na prática. O ponto do registro é outro: o gate não segurou nada, e ninguém percebeu até alguém ir conferir.
+
+A decisão de 2026-08-11 foi aceitar o documento como está, sem reescrevê-lo para inflar a nota. Um `DEFINE` corrigido depois do fato marcaria 15/15 sem que nada tivesse ficado mais claro.
 
 ---
 
 ## Next Step
 
-**Ready for:** `/design .claude/sdd/features/DEFINE_GOVERNANCA_QUALIDADE_DADOS.md` (com a ressalva do Clarity Score abaixo do gate)
+**Concluída.** Design em [DESIGN_GOVERNANCA_QUALIDADE_DADOS.md](./DESIGN_GOVERNANCA_QUALIDADE_DADOS.md), build registrado em [BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md](../reports/BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md).
