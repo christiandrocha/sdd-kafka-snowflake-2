@@ -162,12 +162,7 @@ One caveat on the alerts. `NOTIFY_USERS` is still unset, and it only delivers to
 
 The same run surfaced something nobody had looked at: **both** warehouses have `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute, switched on by default rather than by decision. `QUERY_ACCELERATION_HISTORY` was then checked over 30 days and returned **nothing** — it has never engaged once, anywhere, which is what the scan sizes here predict. It is a cost path with no demonstrated benefit.
 
-**Still enabled at the time of writing.** `CDC_ROLE` lacks `MODIFY` on the warehouses, so this needs the same worksheet as everything else in this section:
-
-```sql
-ALTER WAREHOUSE CDC_WH     SET ENABLE_QUERY_ACCELERATION = FALSE;
-ALTER WAREHOUSE COMPUTE_WH SET ENABLE_QUERY_ACCELERATION = FALSE;
-```
+**Disabled on both warehouses on 2026-08-11**, confirmed by `SHOW WAREHOUSES` reporting `enable_query_acceleration = false` on `CDC_WH`. `COMPUTE_WH` had `AUTO_SUSPEND` cut from 300 to 60 in the same pass.
 
 ### What it actually costs
 
@@ -208,11 +203,13 @@ Two things fall out of that table. The first is a correction: an earlier draft o
 
 The second is larger. Splitting warehouse metering by name gives `COMPUTE_WH` **1.8214** against `CDC_WH` **1.8076** — the default warehouse behind Snowsight worksheets costs marginally *more* than the entire data pipeline, and metering starts on 2026-08-04, two days before `CDC_WH` existed. Roughly half of this account's compute has nothing to do with this project. `cdc_poc_monitor` caps `CDC_WH` and only `CDC_WH`, so the larger consumer runs with no ceiling at all; an account-level monitor, or a second one bound to `COMPUTE_WH`, is what would actually close that. Three other warehouses exist besides those two — `SNOWFLAKE_LEARNING_WH`, `SYSTEM$STREAMLIT_NOTEBOOK_WH` and the `CLOUD_SERVICES_ONLY` bucket — none of them monitored either.
 
-**The single highest-return change available is one number on a warehouse nobody was looking at.** `COMPUTE_WH` runs with `AUTO_SUSPEND = 300`, five times the 60 seconds set on `CDC_WH`. Every worksheet query keeps it burning for five minutes after it finishes, and interactive querying is exactly the pattern where the idle tail dwarfs the work. A short query with a 300-second tail costs about 0.085 credits; the same query at 60 seconds falls to the billing floor, roughly 0.017. Against the 1.82 credits already spent there, that is on the order of 1.4 credits — near 37% of everything this account has consumed, in one statement:
+**The single highest-return change available was one number on a warehouse nobody was looking at.** `COMPUTE_WH` ran with `AUTO_SUSPEND = 300`, five times the 60 seconds set on `CDC_WH`. Every worksheet query kept it burning for five minutes after it finished, and interactive querying is exactly the pattern where the idle tail dwarfs the work. A short query with a 300-second tail costs about 0.085 credits; the same query at 60 seconds falls to the billing floor, roughly 0.017. Against the 1.82 credits already spent there, that is on the order of 1.4 credits — near 37% of everything this account had consumed, in one statement, applied on 2026-08-11:
 
 ```sql
 ALTER WAREHOUSE COMPUTE_WH SET AUTO_SUSPEND = 60;
 ```
+
+The saving is a projection from the billing arithmetic, not a measurement. Confirming it means re-reading `METERING_HISTORY` after a few days of normal use and comparing the daily `COMPUTE_WH` figure against the 1.82 credits it accumulated in its first six.
 
 The trade-off is real but small here. Suspending sooner means more resumes, each carrying its own 60-second minimum, so the saving shrinks toward nothing if queries arrive less than a minute apart. A suspended warehouse also drops its local disk cache, which slows repeated exploration of the same table — on tables of a few thousand rows, that cache is not worth the uptime it costs.
 
