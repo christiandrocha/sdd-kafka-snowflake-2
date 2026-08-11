@@ -154,7 +154,11 @@ Both Dagster sensors (`bronze_new_data_sensor` and `registry_new_subject_sensor`
 Sensor bronze_new_data_sensor skipped: Sem atividade no Kafka (via Prometheus) — Snowflake não consultado.
 ```
 
-At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables — verified on 2026-08-11, though inherited from defaults rather than configured, see below — and by an account-level Resource Monitor that is still unverified. Both are audited by `scripts/verify_governance.sql`.
+At rest, running this pipeline costs zero credits. The design is completed by 1-day Time Travel on Bronze tables — verified on 2026-08-11, though inherited from defaults rather than configured.
+
+**There is no Resource Monitor.** Earlier versions of this section claimed an account-level one; running `scripts/verify_governance.sql` as `ACCOUNTADMIN` on 2026-08-11 showed `SHOW RESOURCE MONITORS` returning zero rows and the account's `RESOURCE_MONITOR` parameter unset, with the warehouse's own field null. All three places a spending cap could live are empty, so nothing stops this account from burning credits — the protection here is behavioural (the warehouse suspends after 60 seconds, and the sensors check Prometheus before touching Snowflake), not enforced.
+
+The same run surfaced something nobody had looked at: `CDC_WH` has `ENABLE_QUERY_ACCELERATION = true` with a scale factor of 2, a path that bills credits beyond the warehouse's own compute. On this workload it is almost certainly dormant — the scans are far too small for acceleration to engage — but it is precisely the kind of spend a monitor would cap, and there is no monitor.
 
 ### What it actually costs
 
@@ -387,8 +391,8 @@ The three service identities under `keys/` hold exactly one role each — `DAGST
 | Claim | Status | How to close it |
 |---|---|---|
 | Billed credit consumption | **Unknown.** `SNOWFLAKE.ACCOUNT_USAGE` is not authorized for `CDC_ROLE`; the `INFORMATION_SCHEMA` metering function runs but returns no rows | `scripts/verify_governance.sql` step 4, as `ACCOUNTADMIN` |
-| Account-level Resource Monitor | **Unknown.** The warehouse's own `resource_monitor` field is null, so any protection would have to be account-level. `SHOW RESOURCE MONITORS` returns zero rows under `CDC_ROLE` — and zero rows there is indistinguishable from "none exists", which is the trap the script now warns about | `verify_governance.sql` steps 1 and 2, as `ACCOUNTADMIN` |
-| The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`) | **Open** since the script was written | Same run resolves it |
+| ~~Account-level Resource Monitor~~ | **Answered on 2026-08-11: there is none.** Under `ACCOUNTADMIN`, `SHOW RESOURCE MONITORS` returned zero rows and `SHOW PARAMETERS LIKE 'RESOURCE_MONITOR' IN ACCOUNT` returned nothing, with `CDC_WH.resource_monitor` null. Zero rows under `CDC_ROLE` had been ambiguous; under `ACCOUNTADMIN` it is an answer | Closed |
+| ~~The two-monitor hypothesis (`cdc_trial_monitor` vs `cdc_poc_monitor`)~~ | **Refuted.** Neither exists. The hypothesis assumed two monitors coexisting for different purposes; the truth was none. `cdc_poc_monitor` was to be created by `scripts/snowflake_setup.sql`, a file absent from this repository — consistent with it never having run | Closed |
 
 A fourth claim used to sit in this table and has left it. The 1-day Time Travel on Bronze was checked on 2026-08-11 with `SHOW TABLES IN SCHEMA CDC_POC.BRONZE` under `CDC_ROLE_RO` — it never needed `ACCOUNTADMIN`, and listing it as blocked was an error. All 20 objects in the schema report `retention_time = 1`: the 10 landing tables written by the connector and the 10 transient `BRONZE_*` tables built by dbt.
 
