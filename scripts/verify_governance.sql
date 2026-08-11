@@ -204,8 +204,11 @@ ORDER BY 2 DESC;
 -- O que a criação do monitor NÃO resolveu: ele é de nível de warehouse, então
 -- só enxerga o CDC_WH. Consumo serverless -- que neste pipeline é o caminho
 -- de ingestão inteiro -- continua sem teto. É o que o passo 6 mede.
--- E o NOTIFY_USERS segue vazio, então os gatilhos de 50% e 75% não entregam
--- nada; o primeiro sinal real é a suspensão em 90%.
+-- O NOTIFY_USERS foi preenchido em 2026-08-11 com o login humano da conta,
+-- cujo IS_EMAIL_VERIFIED é true -- os gatilhos de 50% e 75% passaram a
+-- entregar de verdade. Confira as duas coisas juntas ao auditar: e-mail
+-- verificado sem NOTIFY_USERS não avisa ninguém, e NOTIFY_USERS apontando
+-- para e-mail não verificado é aceito sem erro e também não avisa ninguém.
 --
 -- Se numa execução futura aparecer QUALQUER monitor com FREQUENCY = NEVER
 -- ativo e vinculado ao CDC_WH, a orientação antiga volta a valer: ele não
