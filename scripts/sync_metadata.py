@@ -43,7 +43,28 @@ log = logging.getLogger(__name__)
 REGISTRY_URL     = os.environ["SCHEMA_REGISTRY_URL"]
 SF_ACCOUNT       = os.environ["SNOWFLAKE_ACCOUNT"]
 SF_USER          = os.environ["SNOWFLAKE_USER"]
-SF_PRIVATE_KEY   = os.environ["SNOWFLAKE_PRIVATE_KEY"]
+def _material_da_chave() -> str:
+    """Corpo base64 PKCS8 DER da chave privada.
+
+    O arquivo .p8 é a fonte; a variável de ambiente é o fallback. Até
+    2026-08-11 era o contrário e o mesmo segredo vivia escrito em dois
+    formatos no .env — o que vazou a chave num grep e transformou a rotação
+    num procedimento de cinco lugares. Manter o fallback preserva ambientes
+    que ainda não migraram.
+    """
+    caminho = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH")
+    if caminho and os.path.isfile(caminho):
+        with open(caminho, encoding="utf-8") as fh:
+            return "".join(l.strip() for l in fh if not l.startswith("-----"))
+    if os.environ.get("SNOWFLAKE_PRIVATE_KEY"):
+        return os.environ["SNOWFLAKE_PRIVATE_KEY"]
+    raise SystemExit(
+        "Sem material de chave: defina SNOWFLAKE_PRIVATE_KEY_PATH (arquivo .p8) "
+        "ou SNOWFLAKE_PRIVATE_KEY (base64 PKCS8 DER)."
+    )
+
+
+SF_PRIVATE_KEY   = _material_da_chave()
 SF_DATABASE      = os.environ.get("SNOWFLAKE_DATABASE", "CDC_POC")
 SF_ROLE          = os.environ.get("SNOWFLAKE_ROLE", "CDC_ROLE")
 SF_WAREHOUSE     = os.environ.get("SNOWFLAKE_WAREHOUSE", "CDC_WH")
