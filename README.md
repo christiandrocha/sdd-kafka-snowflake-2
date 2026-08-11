@@ -464,7 +464,7 @@ Half of that fragility is now gone. `scripts/snowflake_setup.sql` set `DATA_RETE
 | Path | Why it matters |
 |---|---|
 | `deploy.yml` | Still never executed, and now known to be undeployable: it targets the ephemeral runner. Four smaller defects were fixed on 2026-08-11 and the trigger is manual-only. Writing a real one needs a deployment target this project does not have — see [CI/CD](#cicd) |
-| `ci.yml` | Written 2026-08-11 and verified locally step by step, but never executed by GitHub Actions — this repository has no remote configured |
+| `ci.yml` | Written 2026-08-11 and verified locally step by step, but never executed by GitHub Actions: `origin/main` is 15 commits behind, so the workflow file has not reached GitHub yet. Its first real run happens on the next push |
 
 The incremental MERGE used to head this table and was closed on 2026-08-11. A single `closed` event for payment `55555555-5555-5555-5555-555555555555` was inserted into `payment_events` in Postgres and left to travel the real path — Debezium, Kafka, the Snowflake sink — landing with `__OP = 'c'`. The chain then ran end to end: `gold_payment_lifecycle` reported `SUCCESS 1` and the table stayed at 8 rows, so the row was updated, not inserted. `total_eventos` went 2 → 3, `foi_fechado` false → true, `fechado_em` and `segundos_ate_fechamento` filled in. All 34 tests in the selection passed.
 
