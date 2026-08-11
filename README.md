@@ -18,8 +18,8 @@ What sets this project apart is not the stack — it is the **control**. Each do
 | Gold layer (6 dbt models) | Materialized | 2026-08-10 |
 | dbt tests (185) | 0 errors, 10 warnings | 2026-08-10 |
 | Full build + test | 63 s of dbt time (26 models, 185 tests) | 2026-08-10 |
-| CI (`.github/workflows/ci.yml`) | Validates dbt, shell, YAML and referenced files — no environment needed | 2026-08-11 |
-| CD (`.github/workflows/deploy.yml`) | Cannot deploy: targets the ephemeral runner. Manual trigger only | — |
+| CI (`.github/workflows/ci.yml`) | Green on its first run, 45 s | 2026-08-11 |
+| CD (`.github/workflows/deploy.yml`) | Failed 9 of 9 runs before being disabled; cannot deploy by design | 2026-08-07 → 08-10 |
 
 All 10 warnings are referential-integrity checks traced back to the source database — see [Data quality](#data-quality).
 
@@ -425,7 +425,11 @@ Run manually through SnowSQL or a worksheet — deliberately **not** automated, 
 
 `.github/workflows/deploy.yml` triggers on pushes to `main` that touch `connectors/`, `dbt/` or the compose files, and assembles `.env` from GitHub Secrets.
 
-**It has never run, and as written it cannot deploy anything.** Reviewed line by line on 2026-08-11, it turned out to have five defects, of which the missing file was the least interesting:
+**It ran nine times and failed nine times, and nobody noticed.** This section previously claimed the workflow had never executed — a claim repeated in three places and never checked against GitHub. `gh run list` says otherwise: every push to `main` touching the trigger paths between 2026-08-07 and 2026-08-10 fired it, and each run died in 8 to 17 seconds at the `Subir/atualizar stack` step, on the missing `docker-compose.prod.yml`. The rest of the pipeline never got to execute.
+
+That inverts this repository's usual failure story. The recurring theme has been things nobody had run; here something ran on a schedule, failed every single time, and the red mark went unread for four days. An untested pipeline and an unwatched one fail the same way, and the second is harder to notice because the machinery looks alive.
+
+Reviewed line by line on 2026-08-11, it turned out to have five defects, of which the missing file was merely the first to bite:
 
 1. It runs `docker compose up` and polls `localhost` **on the GitHub runner**, which is ephemeral. The stack rises with the job and dies with it; nothing is left standing anywhere. This is not a configuration slip — a real deployment needs a target that outlives the job, and this project has none.
 2. `SNOWFLAKE_PRIVATE_KEY` was never written to `.env`, so `envsubst` would have registered the Kafka sink with an empty key — a silent failure, since Debezium stays healthy either way.
@@ -463,8 +467,8 @@ Half of that fragility is now gone. `scripts/snowflake_setup.sql` set `DATA_RETE
 
 | Path | Why it matters |
 |---|---|
-| `deploy.yml` | Still never executed, and now known to be undeployable: it targets the ephemeral runner. Four smaller defects were fixed on 2026-08-11 and the trigger is manual-only. Writing a real one needs a deployment target this project does not have — see [CI/CD](#cicd) |
-| `ci.yml` | Written 2026-08-11 and verified locally step by step, but never executed by GitHub Actions: `origin/main` is 15 commits behind, so the workflow file has not reached GitHub yet. Its first real run happens on the next push |
+| `deploy.yml` | Ran 9 times, failed 9 times, unnoticed for four days — and is undeployable by design, since it targets the ephemeral runner. Four smaller defects fixed on 2026-08-11; trigger is now manual-only. A real one needs a deployment target this project does not have — see [CI/CD](#cicd) |
+| Nobody watches the workflow status | The nine red runs are the evidence. `ci.yml` is only useful if someone reads it; a failing check that no one opens is indistinguishable from no check at all |
 
 The incremental MERGE used to head this table and was closed on 2026-08-11. A single `closed` event for payment `55555555-5555-5555-5555-555555555555` was inserted into `payment_events` in Postgres and left to travel the real path — Debezium, Kafka, the Snowflake sink — landing with `__OP = 'c'`. The chain then ran end to end: `gold_payment_lifecycle` reported `SUCCESS 1` and the table stayed at 8 rows, so the row was updated, not inserted. `total_eventos` went 2 → 3, `foi_fechado` false → true, `fechado_em` and `segundos_ate_fechamento` filled in. All 34 tests in the selection passed.
 
