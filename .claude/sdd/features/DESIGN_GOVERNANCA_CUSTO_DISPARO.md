@@ -153,7 +153,7 @@
 **Resultado da verificação (2026-08-11, como `ACCOUNTADMIN`):** nenhum dos dois monitores existe. `SHOW RESOURCE MONITORS` devolveu zero linhas, o parâmetro `RESOURCE_MONITOR` da conta está vazio e `CDC_WH.resource_monitor` é nulo. A pergunta desta decisão — *qual* dos dois monitores é o real — estava mal formulada: a resposta é nenhum. O `snowflake_setup.sql` tratado aqui como canônico nem sequer está no repositório, o que é consistente com nunca ter sido executado.
 
 **Consequences:**
-- ~~Bloqueante para demo ao vivo até confirmado.~~ Confirmado, e o resultado é o pior dos possíveis: **não existe freio de emergência**. Antes de qualquer demo ao vivo, criar um monitor de verdade — não verificar um que se supunha existir.
+- ~~Bloqueante para demo ao vivo até confirmado.~~ **Resolvido no mesmo dia.** A verificação mostrou que não existia freio nenhum, e o `scripts/snowflake_setup.sql` — escrito na hora, porque também não existia — criou o `cdc_poc_monitor` às 09:54: 20 créditos, `MONTHLY`, `level WAREHOUSE`, vinculado ao `CDC_WH`, com `NOTIFY` em 50% e 75%, `SUSPEND` em 90% e `SUSPEND_IMMEDIATE` em 100%. A decisão deixa de ser bloqueante.
 - As três camadas onde uma trava poderia estar (monitor da conta, parâmetro da conta, vínculo do warehouse) estão vazias. O que segura custo hoje é comportamental: `AUTO_SUSPEND = 60s` e os sensores consultando o Prometheus antes do Snowflake.
 - `CDC_WH` tem `ENABLE_QUERY_ACCELERATION = true` com `SCALE_FACTOR = 2`, ou seja, um caminho de consumo que fatura além da própria compute do warehouse. Provavelmente dormente neste workload — as varreduras são pequenas demais para o QAS engatar — mas é exatamente o tipo de gasto que um monitor pegaria e que aqui não tem quem pegue.
 

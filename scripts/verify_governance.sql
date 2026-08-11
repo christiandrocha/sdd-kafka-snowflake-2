@@ -195,8 +195,17 @@ ORDER BY 2 DESC;
 -- ── Ação recomendada após rodar este script ─────────────────────────────
 --
 -- A recomendação original supunha encontrar um monitor mal configurado. Como
--- não há monitor algum, ela virou outra coisa: CRIAR o que nunca existiu,
--- rodando scripts/snowflake_setup.sql antes de qualquer demo ao vivo.
+-- não havia monitor algum, ela virou outra coisa: CRIAR o que nunca existiu.
+-- Feito no mesmo dia -- scripts/snowflake_setup.sql rodou às 09:54 e criou o
+-- CDC_POC_MONITOR (20 créditos, MONTHLY, level WAREHOUSE), vinculado ao
+-- CDC_WH. Uma reexecução deste arquivo agora deve devolver uma linha no passo
+-- 1 e CDC_POC_MONITOR no passo 3, em vez dos vazios de antes.
+--
+-- O que a criação do monitor NÃO resolveu: ele é de nível de warehouse, então
+-- só enxerga o CDC_WH. Consumo serverless -- que neste pipeline é o caminho
+-- de ingestão inteiro -- continua sem teto. É o que o passo 6 mede.
+-- E o NOTIFY_USERS segue vazio, então os gatilhos de 50% e 75% não entregam
+-- nada; o primeiro sinal real é a suspensão em 90%.
 --
 -- Se numa execução futura aparecer QUALQUER monitor com FREQUENCY = NEVER
 -- ativo e vinculado ao CDC_WH, a orientação antiga volta a valer: ele não
