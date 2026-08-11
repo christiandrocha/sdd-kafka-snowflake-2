@@ -300,6 +300,8 @@ curl -sf http://localhost:8083/connectors
 
 Before the first dbt execution, run the Snowflake scripts in order: `bootstrap_config.sql` (creates the `CONFIG` schema), then `streams_and_tasks.sql`.
 
+**Rotating the Snowflake key means re-running that last command.** `register_connectors.sh` resolves `${SNOWFLAKE_PRIVATE_KEY}` with `envsubst` and `PUT`s the *resolved* configuration into Kafka Connect, so the private key is copied into Connect's own config topic at registration time. Editing `.env` afterwards changes nothing there — the sink keeps presenting the old key and fails authentication the next time it starts, while every other consumer (dbt, Dagster, the CI workflow) picks the new key up automatically because they read the file at `SNOWFLAKE_PRIVATE_KEY_PATH`. Debezium is unaffected; it authenticates against Postgres, not Snowflake. Learned the hard way on 2026-08-11, during a rotation of the `DAGSTER_SERVICE_USER` key.
+
 ### dbt
 
 dbt lives inside the Dagster container, with the project bind-mounted:
