@@ -396,17 +396,24 @@ The number is right, but it was never a design decision. dbt-snowflake materiali
 
 | Path | Why it matters |
 |---|---|
-| Incremental MERGE **updating an existing row** in `gold_payment_lifecycle` | The no-op path is verified: a second run with no new events merged 0 rows and left the table intact. The path that recomputes a payment after a late event has never run, because no new payment event has arrived since the model was built. One INSERT into `payment_events` at the source would close it |
 | CI/CD (`.github/workflows/deploy.yml`) | Never executed against any environment, and still references two files absent from the repository: `docker-compose.prod.yml` and `scripts/snowflake_setup.sql` |
 
-### Waiting on a decision
+The incremental MERGE used to head this table and was closed on 2026-08-11. A single `closed` event for payment `55555555-5555-5555-5555-555555555555` was inserted into `payment_events` in Postgres and left to travel the real path — Debezium, Kafka, the Snowflake sink — landing with `__OP = 'c'`. The chain then ran end to end: `gold_payment_lifecycle` reported `SUCCESS 1` and the table stayed at 8 rows, so the row was updated, not inserted. `total_eventos` went 2 → 3, `foi_fechado` false → true, `fechado_em` and `segundos_ate_fechamento` filled in. All 34 tests in the selection passed.
 
-| Item | The decision |
+What that run actually proves is narrower than "the merge works", and more useful. `criado_em` and `autorizado_em` survived the update. The model reads the **full** history of every affected `payment_id` rather than only the new events, precisely so that a late `closed` arriving alone cannot overwrite a good row with a mutilated one; the comment at the top of the model has claimed that since it was written, and this is the first run to demonstrate it. The event carried an internal `timestamp` above the global watermark by design — the `alvo` CTE compares against `MAX(ultimo_evento_ms)` over the whole table, so an event older than the newest event of *any other* payment would have been skipped. That remains an untested edge, and a real out-of-order arrival would hit it.
+
+### Decided on 2026-08-11
+
+Four items sat here waiting on a human. All four were answered on the same day; what each one cost is recorded so the reasoning survives the decision.
+
+| Item | The call |
 |---|---|
-| Test severity convention | Applied to 102 Silver and Gold tests, but Decision 3 of `DESIGN_GOVERNANCA_QUALIDADE_DADOS` is still marked *Proposed — requires human review*. Ratify it or change it |
-| `payment_id` cardinality | 2,210 events over 8 identifiers makes three Gold models structurally correct and commercially meaningless. Regenerate the seed data, or accept those models as scaffolding |
-| Missing `DEFINE` and `DESIGN` for the Silver and Gold layers | The build happened without them; `BUILD_REPORT_CAMADAS_SILVER_GOLD.md` opens by declaring the gap. Write them retroactively or accept the debt explicitly |
-| `GOVERNANCA_QUALIDADE_DADOS` | Has a `DEFINE` and a `DESIGN` and was never built |
+| Test severity convention | **Ratified, retroactively.** Decision 3 had said in bold not to apply the convention before acceptance, and the Silver/Gold build applied it anyway, to 102 tests. Ratifying legalises a state that had been in production for a day; the original sentence is preserved in the decision text rather than deleted, because the order in which this happened is the useful part. Still open: the 83 Bronze tests never passed through the criterion — they sit at `error` by default, not by analysis |
+| `payment_id` cardinality | **Accepted as scaffolding.** The three payment models are now marked as such in `dbt/models/gold/schema.yml`, so the warning travels with the model instead of living only here. Regenerating the seed would invalidate the cost and performance numbers measured above, and the models demonstrate the pattern correctly either way. The sharper symptom stands: `orders.payment_key` has 410 distinct values and **zero** intersection with `payment_events.payment_id`, so orders and payments cannot be joined in this database |
+| Missing `DEFINE` and `DESIGN` for the Silver and Gold layers | **Debt accepted, not repaid.** They will not be written retroactively. `BUILD_REPORT_CAMADAS_SILVER_GOLD.md` already documents what exists and admits the deviation in its opening paragraph; a `DEFINE` written after the build would describe what was built rather than what was promised, adding form without control |
+| `GOVERNANCA_QUALIDADE_DADOS` | **Closed — and the description here was wrong.** The feature was never missing code: its `DESIGN` file manifest lists exactly one file, itself, and states that no production code is generated. What was missing was the phase-3 record and the human acceptance Decision 3 demanded. Both now exist in `BUILD_REPORT_GOVERNANCA_QUALIDADE_DADOS.md` |
+
+One thing surfaced while closing these. The `DEFINE` behind that last feature scored 11/15 on clarity; the Define gate published in `.claude/sdd/_index.md` is 12/15. It failed its own gate, produced a `DESIGN` anyway, and that `DESIGN` produced the severity convention that reached 102 tests in production. No single step did damage — the decisions hold up, and the convention proved correct in practice. The gate simply never stopped anything, and nobody noticed for a week. It is recorded in the `DEFINE` rather than fixed by rewriting the document to a passing score.
 
 ### Operational fragility
 
