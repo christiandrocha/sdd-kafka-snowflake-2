@@ -1,0 +1,35 @@
+[project]
+name = "sdd-kafka-snowflake-2"
+version = "1.0.0"
+description = "CDC streaming pipeline: PostgreSQL -> Debezium -> Kafka -> Snowflake, dbt + Dagster"
+authors = [{ name = "Christian Rocha" }]
+requires-python = ">=3.11"
+
+# Runtime dependencies are installed inside the containers (dagster/Dockerfile
+# for Dagster + dbt, the Connect image for the sink). This file exists for the
+# tooling below, which runs on the host and in CI.
+
+# `ruff check .` is clean and enforced by the `lint` job in
+# .github/workflows/ci.yml, by `make lint`, and by pre-commit on changed files.
+#
+# Before removing an F401 in dagster/pipeline/: Dagster registers definitions by
+# import, so an "unused" import there can be load-bearing. Check it against
+# `dagster/pipeline/__init__.py` first. The one removed in this repository
+# (`dbt_resource` in assets.py) was safe because `__init__.py` imports it
+# straight from `.resources`.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".claude", ".venv", "dbt/dbt_packages", "dbt/target"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pipeline"]
+# Sem isto o isort classifica `dagster` como first-party, porque existe um
+# diretorio `dagster/` na raiz do repo -- e separa `from dagster import ...`
+# do resto das dependencias de terceiros. O pacote e de terceiros; a pasta
+# homonima e onde o code location vive.
+known-third-party = ["dagster", "dagster_dbt", "dagster_snowflake"]

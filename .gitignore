@@ -58,9 +58,15 @@ keys/
 # Este repo público cobre apenas a stack Kafka → Snowflake.
 # O conteúdo do curso (Formação AI Data Engineer) vive fora dele.
 presentation/
-docs/
 demos/
 images/
+# `docs/*` em vez de `docs/` pelo mesmo motivo do `.claude/*` abaixo: com o
+# diretorio inteiro excluido o git nao desce nele e a negacao nao teria efeito.
+docs/*
+# Excecao: os ADRs sao engenharia deste pipeline, nao conteudo de curso. O
+# codigo cita ADR-0018/0019/0022 por numero -- sem estes arquivos versionados,
+# a referencia aponta para o nada.
+!docs/adr/
 # `.claude/*` em vez de `.claude/` porque o git não desce em diretório excluído:
 # com `.claude/` a negação abaixo não teria efeito nenhum.
 .claude/*
