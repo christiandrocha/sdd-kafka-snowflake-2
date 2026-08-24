@@ -8,6 +8,78 @@ What sets this project apart is not the stack — it is the **control**. Each do
 
 ---
 
+## TL;DR
+
+A food-delivery company changes a row in Postgres — an order is placed, a driver
+starts a shift, a payment closes. This project makes that change appear in
+Snowflake, cleaned, typed and tested, without anyone running anything and without
+a warehouse burning credits while it waits.
+
+It is an end-to-end CDC pipeline for the Uber Eats Brazilian market: **10 domains
+from PostgreSQL through Debezium and Kafka into Snowflake**, modelled in dbt
+across Bronze/Silver/Gold, orchestrated by Dagster, with **185 tests** and a cost
+gate that costs nothing when idle.
+
+What sets it apart is not the stack — it is the **control**. Each domain's CDC
+strategy lives in a metadata table rather than in SQL; the pipeline is woken by
+Snowflake itself rather than by polling; and every layer's invariants are tested,
+with severity chosen case by case rather than left at the default.
+
+---
+
+## The Problem
+
+A CDC pipeline has two failure modes that do not look like failures.
+
+**The first is cost.** The obvious way to know whether new data arrived is to ask,
+and asking means waking a warehouse. The original design polled `MAX(create_time)`
+across 20 Bronze tables every 60 seconds against a warehouse with
+`AUTO_SUSPEND=60s`: the two periods collided and the warehouse was effectively
+never idle. The account paid, continuously, to discover that nothing had happened.
+
+**The second is silence.** Data that is wrong but plausible flows to the end of the
+pipeline and gets reported. A schema drifts and a column is inferred one type
+narrower. A low-volume domain falls behind a shared watermark and stops being
+processed — its rows are not lost, they are invisible, which is worse, because
+nothing raises a hand.
+
+This repository is the answer to both, and its history is mostly the record of
+finding those failures rather than avoiding them: a monitor everyone believed in
+that did not exist, a deploy workflow that ran nine times and failed nine times
+unread, a severity convention applied to 102 tests a day before it was accepted.
+Each one is written down in [`docs/adr/`](docs/adr/) or under
+[Known gaps](#known-gaps-and-unverified-claims), including the ones that make the
+project look worse.
+
+> **Dataset framing:** 115k records across 52 JSON files is an architectural
+> microcosm, not a production volume. What is being validated is idempotency,
+> trigger economics and contract governance — the shape that has to hold when
+> real volume arrives.
+
+---
+
+## Stack
+
+| Layer | Technology | Decision |
+|---|---|---|
+| Source | PostgreSQL 15 (Docker) | `wal_level=logical` for Debezium CDC |
+| CDC | Debezium 2.x | Change events per row, per domain |
+| Broker | Kafka 3.x (Confluent 7.5.0) | With Zookeeper — matches the Confluent image set |
+| Schema | Confluent Schema Registry 7.5.0 | **Avro + `BACKWARD`** — the contract boundary ([ADR-0030](docs/adr/0030_avro_and_schema_registry_as_the_contract.md)) |
+| Ingestion | Snowflake Kafka Connector **v4** | Snowpipe Streaming, row-level commits ([ADR-0029](docs/adr/0029_snowpipe_streaming_as_the_ingestion_path.md)) |
+| Schematization | `enable.schematization=true`, `validation=client_side` | Native typed columns, types from the registry ([ADR-0021](docs/adr/0021_kafka_connector_v4_schematization.md)) |
+| Warehouse | Snowflake, `CDC_WH` | `AUTO_SUSPEND=60s`; `cdc_poc_monitor` as the credit brake ([ADR-0020](docs/adr/0020_resource_monitor_canonicalization.md)) |
+| Trigger gate | Streams + Triggered Tasks | `SYSTEM$STREAM_HAS_DATA` evaluated free in the control plane ([ADR-0019](docs/adr/0019_streams_and_triggered_tasks_as_the_gate.md)) |
+| Transformation | dbt-snowflake 1.7.5 | 26 models, 185 tests, severity per test ([ADR-0027](docs/adr/0027_severity_convention.md)) |
+| CDC strategy | `CONFIG.TABLE_METADATA` + `resolve_cdc` | Strategy is data, not SQL — fed from the Avro `doc` field |
+| Orchestration | Dagster 1.6 | Sensors gated on Prometheus before touching Snowflake |
+| Dagster storage | PostgreSQL 15, dedicated | Separate from the CDC source, no circular dependency ([ADR-0018](docs/adr/0018_dedicated_postgres_for_dagster_storage.md)) |
+| Observability | Prometheus 2.49 + Grafana 10.2 | Broker metrics via JMX and kafka-exporter |
+| CI | GitHub Actions | `ruff` + `yamllint` + `dbt parse` with throwaway credentials |
+| Methodology | Claude Code + AgentSpec | 5-phase SDD, artifacts under `.claude/sdd/` |
+
+---
+
 ## Status
 
 | Component | State | Last verified |
@@ -100,7 +172,9 @@ or a specific piece of work, and the ones that were closed are recorded in
       └────────────────┘                          └──────────────────┘
 ```
 
-### Domains
+---
+
+## Domain Map (10 domains)
 
 Ten tables travel the full pipeline, from Postgres to Gold:
 
@@ -587,9 +661,86 @@ The Dagster asset graph is frozen at container import time. **Adding a dbt model
 
 ---
 
-## Workflow
+## Methodology — AgentSpec SDD
 
 The repository follows a five-phase specification workflow — brainstorm, define, design, build, ship — with artifacts versioned under `.claude/sdd/`. Every delivered feature leaves behind its `DEFINE`, its `DESIGN`, a build report and a closing record, which keeps architectural decisions traceable long after the merge.
+
+---
+
+## What Evolved from sdd-kafka-snowflake
+
+This repository is the second iteration. The first — `sdd-kafka-snowflake`,
+referred to internally as *v5-delivery* — reached Snowflake and worked; what it
+did not do was survive scrutiny about how it got there. Every row below is a
+decision recorded in [`docs/adr/`](docs/adr/), with the predecessor's behaviour
+taken from the `Context` section of the design document that superseded it.
+
+| Component | sdd-kafka-snowflake | sdd-kafka-snowflake-2 |
+|---|---|---|
+| Ingestion | Connector v2.1.2, `ingestion.method=SNOWPIPE` — classic, file-based, on a deprecated generation | v4 `SnowflakeStreamingSinkConnector`, row-level commits ([ADR-0029](docs/adr/0029_snowpipe_streaming_as_the_ingestion_path.md)) |
+| Payload | One `RECORD_CONTENT` VARIANT, unpacked at the top of every Bronze model | Natively typed columns; types read from the registry, not inferred ([ADR-0021](docs/adr/0021_kafka_connector_v4_schematization.md)) |
+| Ingestion scope | 20 domains, 10 of which never fed Silver or Gold | 10 Tier-1 domains — the ones that reach a Gold aggregation ([ADR-0022](docs/adr/0022_tier_1_ingestion_scope.md)) |
+| Pipeline trigger | Dagster sensor polling `MAX(create_time)` across 20 Bronze tables every 60s, colliding with `AUTO_SUSPEND=60s` | Streams + Triggered Tasks; a false `WHEN` engages no warehouse ([ADR-0019](docs/adr/0019_streams_and_triggered_tasks_as_the_gate.md)) |
+| Sensor bookkeeping | Global `detected_at` watermark — a high-volume domain could advance it past a low-volume one, which then stopped being processed | `consumed = FALSE`, no timestamp filter ([ADR-0024](docs/adr/0024_sensor_without_global_watermark.md)) |
+| Dagster storage | SQLite — fragile under concurrent writes and crash | Dedicated PostgreSQL, deliberately not the CDC source ([ADR-0018](docs/adr/0018_dedicated_postgres_for_dagster_storage.md)) |
+| Credit brake | Two conflicting descriptions in two documents; **neither monitor existed** | `cdc_poc_monitor`, verified and created 2026-08-11 ([ADR-0020](docs/adr/0020_resource_monitor_canonicalization.md)) |
+| Test severity | Whatever the dbt default gave | 185 tests classified case by case against a stated criterion ([ADR-0027](docs/adr/0027_severity_convention.md)) |
+| Bronze invariant | Append-only assumed by three mechanisms, stated by none | Declared, with the enforcement grant identified as the next step ([ADR-0025](docs/adr/0025_bronze_is_append_only.md)) |
+| Decision records | ADR numbers cited in code; **the files did not survive the move** | 12 records, numbering preserved so the citations resolve |
+
+The through-line is not "v2 is faster". It is that in v1 the expensive parts were
+assumptions nobody had checked — a monitor, a watermark, an ingestion method, a
+grain. Most of what changed here started as somebody going to look.
+
+---
+
+## Interview Cheat Sheet
+
+**On making idleness free:**
+> "Polling asks a warehouse whether anything happened, and asking costs money.
+> We moved the question into Snowflake: a Stream per Bronze table and a Task with
+> `WHEN SYSTEM$STREAM_HAS_DATA`. The predicate is evaluated in the control plane,
+> so a false answer engages no compute. And because the Stream sits on the real
+> Bronze table, it can only fire after Snowpipe commits — there is no gap between
+> 'Kafka has it' and 'Snowflake has it' to paper over with a debounce."
+
+**On the watermark we deleted:**
+> "The sensor used `detected_at > cursor AND consumed = FALSE`. That is the
+> conventional shape and it is wrong here: ten Tasks write whenever their own
+> stream fires, so `detected_at` across domains is not a monotonic sequence. A
+> high-volume domain advances the shared cursor and a low-volume one falls behind
+> it — the row is not lost, it is invisible. We removed the cursor entirely.
+> `consumed = FALSE` was already sufficient; the cursor was adding an ordering
+> assumption the data never satisfied."
+
+**On the Schema Registry doing more than serialization:**
+> "The registry is the type authority for the sink, the `BACKWARD` compatibility
+> gate, and — through the Avro `doc` field — the CDC contract itself.
+> `sync_metadata.py` parses it into `CONFIG.TABLE_METADATA`, and `resolve_cdc`
+> reads that. So adding a domain needs no code change: register the subject with a
+> populated `doc` and the pipeline picks it up."
+
+**On test severity:**
+> "A test is `error` if the violation, propagated, would make a business metric
+> objectively wrong. Our 10 warnings are referential gaps inherited from the source
+> database — they degrade a metric without falsifying it. The 83 Bronze tests were
+> reviewed one by one and all stayed `error`: every tested column there is
+> structural load — MERGE key, delete filter, dedup ordering, incremental
+> watermark."
+
+**On what this design does *not* solve:**
+> "The gate makes idleness free, not throughput cheap. When those ten Tasks fire
+> they run on `CDC_WH`, which bills a 60-second minimum per resume — under
+> continuous traffic they would keep the warehouse on permanently, which is the
+> behaviour we removed. It solves the bursty case, and this workload is bursty.
+> Saying that out loud is the difference between a design and a claim."
+
+**On the failure that taught the most:**
+> "Two documents described two different Resource Monitors, so we went to check
+> which was real. Neither existed — no account monitor, no account parameter, no
+> warehouse binding. The question was badly formed and the only thing that revealed
+> it was running the query. That is why the ADR keeps the original question next to
+> its refutation instead of quietly rewriting history."
 
 ---
 
