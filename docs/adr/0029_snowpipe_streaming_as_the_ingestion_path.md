@@ -8,7 +8,8 @@
 Kafka has to reach Snowflake. Three mechanisms exist, and they differ in latency,
 in billing model, and in how much infrastructure they oblige the project to own.
 
-The starting position was worse than it looked. The connector was
+The starting position — before this ADR, not after — was worse than it looked.
+The connector was
 `snowflake-kafka-connector` v2.1.2 running with
 `snowflake.ingestion.method=SNOWPIPE` — **classic, file-based Snowpipe** — while
 every document in the project described the pipeline as "Snowpipe Streaming".
@@ -88,9 +89,19 @@ the most expensive to skip.
 
 ## What this ADR is really about
 
-The documentation claimed Snowpipe Streaming for months while the configuration
-said `SNOWPIPE`. The decision recorded here is partly the migration and partly
-the correction: the architecture became what it had been described as.
+**Snowpipe Streaming is the ingestion path in use today**, and has been since the
+migration shipped on 2026-08-07. This section is about how it got there.
+
+Until 2026-08-04 the connector was v2.1.2 running `ingestion.method=SNOWPIPE` —
+classic, file-based — while every document in the project described the pipeline
+as "Snowpipe Streaming". The claim was true of the intent and false of the
+configuration, and nobody had checked which was which.
+
+So the record here is two things at once: a migration off a deprecated
+generation, and the closing of a gap between what the architecture was and what
+it said it was. Both are done. The distinction matters only for reading the
+project's history — for instance, why the cost table lists classic `PIPE`
+consumption at 0.0000 and labels it *unused* rather than omitting it.
 
 ## See also
 
