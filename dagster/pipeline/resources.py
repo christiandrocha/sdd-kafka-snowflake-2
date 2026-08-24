@@ -16,7 +16,7 @@ conexões nomeadas no `~/.snowflake/config.toml` do host.
 import os
 from pathlib import Path
 
-from dagster import RetryPolicy, Backoff
+from dagster import Backoff, RetryPolicy
 from dagster_dbt import DbtCliResource
 from dagster_snowflake import SnowflakeResource
 

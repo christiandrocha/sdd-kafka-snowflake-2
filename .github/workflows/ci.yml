@@ -27,6 +27,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Job separado do `validate` de propósito: ruff e yamllint não precisam do dbt
+  # instalado e terminam em segundos, então rodam em paralelo com o job caro em
+  # vez de atrás dele.
+  #
+  # As 26 ocorrências que existiam quando o ruff entrou no repositório foram
+  # corrigidas antes deste job ser criado — 8 imports mortos, 6 anotações
+  # `Optional[X]`, 4 linhas longas, 3 blocos de import fora de ordem, 3
+  # `datetime.timezone.utc`, 1 nome ambíguo e 1 variável atribuída sem uso.
+  # Um gate que nasce vermelho ensina todo mundo a ignorá-lo.
+  #
+  # O yamllint cobre `connectors/` e `observability/`, que são configuração
+  # escrita à mão. `dbt/models/**/schema.yml` fica fora de propósito: as linhas
+  # longas de lá são descrição de coluna, e quebrar prosa não melhora nada.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar linters
+        run: pip install ruff yamllint
+
+      - name: ruff
+        run: ruff check .
+
+      - name: yamllint
+        run: yamllint connectors/ observability/
+
   validate:
     runs-on: ubuntu-latest
     steps:

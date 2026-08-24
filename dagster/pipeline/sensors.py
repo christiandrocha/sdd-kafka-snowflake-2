@@ -54,7 +54,7 @@ o custo do próprio sensor — ambos corrigidos e anotados no ponto do código.
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import requests
 from dagster import (
@@ -193,7 +193,9 @@ def bronze_new_data_sensor(context, snowflake: SnowflakeResource) -> SensorResul
         hot -= 1
     else:
         return SensorResult(
-            skip_reason=SkipReason("Sem atividade no Kafka (via Prometheus) — Snowflake não consultado."),
+            skip_reason=SkipReason(
+                "Sem atividade no Kafka (via Prometheus) — Snowflake não consultado."
+            ),
             cursor=json.dumps({"totals": current_totals, "hot": 0, "initialized": True}),
         )
 
@@ -315,7 +317,7 @@ def registry_new_subject_sensor(context, snowflake: SnowflakeResource) -> Sensor
     return SensorResult(
         run_requests=[
             RunRequest(
-                run_key=f"registry-sync-{datetime.now(timezone.utc).isoformat()}",
+                run_key=f"registry-sync-{datetime.now(UTC).isoformat()}",
                 tags={"new_tables": ",".join(sorted(new_tables))},
             )
         ],

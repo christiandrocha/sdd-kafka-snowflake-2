@@ -1,13 +1,13 @@
-import os
 import json
-from datetime import datetime, timezone
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dagster import AssetExecutionContext, asset
-from dagster_dbt import dbt_assets, DbtCliResource
+from dagster_dbt import DbtCliResource, dbt_assets
 from dagster_snowflake import SnowflakeResource
 
-from .resources import dbt_resource, DBT_PROJECT_DIR
+from .resources import DBT_PROJECT_DIR
 
 SF_DATABASE   = os.getenv("SNOWFLAKE_DATABASE", "CDC_POC")
 MANIFEST_PATH = DBT_PROJECT_DIR / "target" / "manifest.json"
@@ -96,13 +96,13 @@ def log_processing_results(
         run_results = json.load(f)
 
     invocation_id = run_results.get("metadata", {}).get("invocation_id", "unknown")
-    elapsed_time  = run_results.get("elapsed_time", 0)
     results       = run_results.get("results", [])
 
     rows_to_insert = []
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S.%f")
 
-    # Build table row counts from Snowflake for rows_processed (adapter_response is empty for custom MERGE)
+    # Build table row counts from Snowflake for rows_processed
+    # (adapter_response is empty for the custom MERGE)
     row_counts: dict[str, int] = {}
     with snowflake.get_connection() as _conn:
         _cur = _conn.cursor()
