@@ -30,9 +30,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 import psycopg2
 import psycopg2.extras
@@ -46,7 +44,7 @@ log = logging.getLogger(__name__)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _driver_key_to_int(key: Optional[str], n_drivers: int = 354) -> Optional[str]:
+def _driver_key_to_int(key: str | None, n_drivers: int = 354) -> str | None:
     """Maps alphanumeric driver_key (e.g. 'wr2179397') to an integer string
     in range 1..n_drivers so it joins against drivers.driver_id."""
     if not key:
@@ -192,7 +190,7 @@ DOMAIN_CONFIG = {
 
 # ── File handling ─────────────────────────────────────────────────────────────
 
-def get_domain(filename: str) -> Optional[str]:
+def get_domain(filename: str) -> str | None:
     """Extracts domain prefix from filename."""
     parts = filename.split("_")
     # Try 2-word prefix first (kafka_orders, mysql_menu, etc.)
@@ -214,7 +212,7 @@ def load_file(path: Path) -> list[dict]:
     return records
 
 
-def select_files(data_dir: Path, batch: str, domain_filter: Optional[str]) -> list[Path]:
+def select_files(data_dir: Path, batch: str, domain_filter: str | None) -> list[Path]:
     """Returns files to process based on batch mode and domain filter."""
     all_files = sorted([
         f for f in data_dir.iterdir()
@@ -258,7 +256,7 @@ def insert_batch(conn, sql: str, records: list[dict]) -> int:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def run(data_dir: Path, batch: str, domain_filter: Optional[str],
+def run(data_dir: Path, batch: str, domain_filter: str | None,
         dry_run: bool, db_url: str) -> dict:
 
     files = select_files(data_dir, batch, domain_filter)
