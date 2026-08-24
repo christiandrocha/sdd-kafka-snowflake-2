@@ -25,6 +25,45 @@ All 10 warnings are referential-integrity checks traced back to the source datab
 
 ---
 
+## What works, and what is next
+
+The table above is dated evidence; this is what it adds up to. Read this section
+before the detail — [Cost governance](#cost-governance), [Data quality](#data-quality)
+and [Known gaps](#known-gaps-and-unverified-claims) each go deep on one part of it.
+
+### What works
+
+| | Evidence |
+|---|---|
+| **End-to-end CDC**, PostgreSQL → Debezium → Kafka → Snowflake, for the 10 Tier-1 domains | 10 Snowflake-managed pipes in `BRONZE`, `kind = STREAMING`, verified 2026-08-12 ([ADR-0029](docs/adr/0029_snowpipe_streaming_as_the_ingestion_path.md)) |
+| **26 dbt models** across Bronze, Silver and Gold | Materialized 2026-08-10; full build and test in 63 s |
+| **185 tests**, every one classified by severity rather than by default | 0 errors, 10 warnings — all 10 traced to referential gaps in the source ([ADR-0027](docs/adr/0027_severity_convention.md)) |
+| **Idle costs nothing.** The gate evaluates `SYSTEM$STREAM_HAS_DATA` in Snowflake's control plane; a false answer engages no warehouse | [ADR-0019](docs/adr/0019_streams_and_triggered_tasks_as_the_gate.md); the whole ingestion path measured at 0.0005 credits |
+| **A credit brake exists.** `cdc_poc_monitor` — 20 credits, `MONTHLY`, warehouse level, `NOTIFY` at 50/75%, `SUSPEND` at 90%, `SUSPEND_IMMEDIATE` at 100% | Created 2026-08-11 after verification found the account had no monitor at all ([ADR-0020](docs/adr/0020_resource_monitor_canonicalization.md)) |
+| **Adding a domain needs no code change.** Register the Avro subject with a populated `doc` and the sensor, `CONFIG.TABLE_METADATA` and `resolve_cdc` do the rest | [ADR-0030](docs/adr/0030_avro_and_schema_registry_as_the_contract.md) |
+| **CI runs and is green**, on a workflow that needs no Snowflake, Kafka or host | `lint` + `validate`, 2026-08-11 |
+
+### What is next
+
+Ordered by what would hurt most if left alone.
+
+| | Why it matters | Where |
+|---|---|---|
+| **There is no deploy target.** `deploy.yml` runs `docker compose up` inside an ephemeral runner; the stack dies with the job | The repository cannot deploy anywhere, by design and not by misconfiguration. It needs an SSH host or a registry plus a remote orchestrator before the workflow means anything | [CI/CD](#cicd) |
+| **The gate solves the bursty case, not the streaming case** | Under continuous traffic, ten Tasks firing every minute keep `CDC_WH` on permanently — the 60-second minimum per resume — which is the behaviour the redesign existed to remove. This workload is bursty, so it holds today | [Cost governance](#cost-governance) |
+| **`scripts/00_account_bootstrap.sql` has never been executed as a whole** | It is the only description of the account's shape. The `CREATE PIPE` omission found on 2026-08-12 is what an unrun script looks like: rebuilding from git would have produced working dbt and dead ingestion | [Snowflake scripts](#snowflake-scripts) |
+| **No regression test for the watermark bug** | `AT-003` specifies exactly the scenario — a high-volume domain advancing past a low-volume one — and the bug has already happened once | [ADR-0024](docs/adr/0024_sensor_without_global_watermark.md) |
+| **Bronze append-only is a convention, not a constraint** | Three mechanisms depend on it silently. The fix is one statement: `REVOKE UPDATE, DELETE ON ALL TABLES IN SCHEMA BRONZE FROM ROLE CDC_ROLE` | [ADR-0025](docs/adr/0025_bronze_is_append_only.md) |
+| **Workload separation is undecided.** A second warehouse (`CDC_WH_TRANSFORM`) sits in the `DEFINE` as deferred, awaiting context | Everything shares `CDC_WH` today — ingestion, transformation and any BI query compete for the same compute and the same 60-second minimum. There is no ADR because no choice has been made | `DEFINE_GOVERNANCA_CUSTO_DISPARO.md` |
+| **`run_retention` is undefined in `dagster.yaml`** | Run history grows without bound on the dedicated Postgres | [ADR-0018](docs/adr/0018_dedicated_postgres_for_dagster_storage.md) |
+| **The Dagster asset graph is frozen at import** | Adding a dbt model requires restarting `dagster-daemon`; without it the pipeline runs successfully while ignoring the new layer. This happened on 2026-08-10 | [Operational fragility](#operational-fragility) |
+
+Nothing above is a disclaimer. Each line is either a decision waiting on context
+or a specific piece of work, and the ones that were closed are recorded in
+[Known gaps](#known-gaps-and-unverified-claims) with what the call cost.
+
+---
+
 ## Architecture
 
 ```
@@ -84,6 +123,8 @@ Ten tables travel the full pipeline, from Postgres to Gold:
 
 | Decision | Alternative considered | Why this |
 |---|---|---|
+| Snowpipe Streaming (v4 connector) | Classic file-based Snowpipe; `COPY INTO` from a stage on a schedule | Row-level commits are what let the trigger gate observe the landing instead of guessing at it. Measured cost of the whole ingestion path: 0.0005 credits |
+| Avro + Schema Registry at `BACKWARD` | JSON without a registry (Debezium's default); types hardcoded in the Bronze models | One artifact serves three consumers: the sink's type authority, the compatibility gate, and — via the schema `doc` field — each domain's CDC strategy in `CONFIG.TABLE_METADATA` |
 | Snowflake Streams + Triggered Tasks as the trigger gate | Custom Kafka watcher calling Dagster's GraphQL API | The Stream sits on the Bronze table, so it can only fire *after* Snowpipe commits — no heuristic debounce for the publish-vs-materialize gap. A false `WHEN` costs nothing |
 | Dedicated `dagster-postgres` | Reuse the CDC source Postgres | The source going down is the incident the orchestrator has to survive in order to report it |
 | Sensor filters on `consumed = FALSE` only | Global `detected_at` watermark cursor | A watermark is only safe when production is ordered; ten independent Tasks are not. The cursor had already made a low-volume domain invisible once |
@@ -95,7 +136,7 @@ Ten tables travel the full pipeline, from Postgres to Gold:
 | Severity chosen per test | Leave all 185 at the `error` default | A test is `error` if the violation, propagated, would make a business metric objectively wrong. Referential gaps inherited from the source degrade a metric; they do not falsify it |
 
 > Full write-ups, with the alternatives and what each one cost, in
-> [`docs/adr/`](docs/adr/) — 10 records. The numbering is inherited from the
+> [`docs/adr/`](docs/adr/) — 12 records. The numbering is inherited from the
 > predecessor repository and cited by number in `docker-compose.yml`,
 > `scripts/streams_and_tasks.sql` and `dagster/pipeline/sensors.py`.
 
@@ -336,7 +377,7 @@ dbt/
 observability/        Prometheus (scrape + alerts), JMX exporter
 scripts/              CONFIG schema bootstrap, streams/tasks, roles, governance
 tests/                load generator for the source Postgres
-docs/adr/             architecture decision records (10)
+docs/adr/             architecture decision records (12)
 .claude/sdd/          specification workflow records (define → design → build → ship)
 Makefile              stack, data loading, dbt and quality targets
 .env.example          every variable the stack reads, with the secrets blank

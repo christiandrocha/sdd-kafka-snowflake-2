@@ -18,6 +18,8 @@ what it cost.
 | [0026](0026_gold_aggregation_categories.md) | Gold models categorized by aggregation pattern | Accepted |
 | [0027](0027_severity_convention.md) | Severity convention for tests, logging and cost actions | Accepted — ratified retroactively |
 | [0028](0028_record_metadata_as_watermark.md) | `RECORD_METADATA` retained as watermark and dedup tiebreaker | Accepted — decided during Build |
+| [0029](0029_snowpipe_streaming_as_the_ingestion_path.md) | Snowpipe Streaming as the ingestion path | Accepted |
+| [0030](0030_avro_and_schema_registry_as_the_contract.md) | Avro + Schema Registry as the contract boundary | Accepted |
 
 ## On the numbering
 
@@ -41,6 +43,17 @@ Two gaps are deliberate and worth stating plainly:
   because inventing it would be worse than the gap.
 - **ADR-0028 is new.** It records a decision taken during Build on 2026-08-07,
   from evidence rather than from design, which never received a number.
+- **ADR-0029 and ADR-0030 are new**, continuing the inherited sequence. They
+  formalize two decisions that were implemented and load-bearing but never
+  written down: the ingestion path, and the contract boundary at the registry.
+
+One decision was deliberately **not** written. Splitting the warehouse
+(`CDC_WH_TRANSFORM` alongside `CDC_WH`) appears twice in
+`.claude/sdd/features/DEFINE_GOVERNANCA_CUSTO_DISPARO.md`, both times as
+*"aguardando contexto adicional, vira feature própria depois"* — deferred, with
+no choice made and no alternative rejected. `CDC_WH_BI` does not appear in this
+repository at all. There is nothing to record yet; it is tracked in the README
+under **What's next** instead, which is where an open question belongs.
 
 ## Format
 
