@@ -1,0 +1,15 @@
+# Scope: connectors/ and observability/ — hand-written configuration.
+# dbt/models/**/schema.yml is deliberately out of scope: its long lines are
+# column descriptions, prose that wrapping makes worse, not formatting.
+extends: default
+
+rules:
+  document-start: disable
+  truthy:
+    check-keys: false
+  # Disabled rather than raised: the offenders are single-token values that
+  # cannot be wrapped without breaking them — PromQL expressions in
+  # observability/prometheus/alert_rules.yml and JDBC URLs in connectors/.
+  line-length: disable
+  comments:
+    min-spaces-from-content: 1

@@ -19,18 +19,10 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import requests
 import snowflake.connector
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    load_pem_private_key,
-)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,7 +47,7 @@ def _material_da_chave() -> str:
     caminho = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH")
     if caminho and os.path.isfile(caminho):
         with open(caminho, encoding="utf-8") as fh:
-            return "".join(l.strip() for l in fh if not l.startswith("-----"))
+            return "".join(linha.strip() for linha in fh if not linha.startswith("-----"))
     if os.environ.get("SNOWFLAKE_PRIVATE_KEY"):
         return os.environ["SNOWFLAKE_PRIVATE_KEY"]
     raise SystemExit(
@@ -99,7 +91,7 @@ def get_latest_schema(subject: str) -> dict:
     return resp.json()
 
 
-def parse_doc_metadata(doc: Optional[str]) -> dict:
+def parse_doc_metadata(doc: str | None) -> dict:
     """
     Parses the doc field of an Avro schema for CDC metadata.
     Expected format: "table_type=entity,cdc_strategy=upsert,unique_key=id"
@@ -178,7 +170,7 @@ def upsert_metadata(conn, table_name: str, topic: str, meta: dict,
     Records changes in METADATA_HISTORY.
     Returns change_type: 'insert' | 'update' | 'no_change'
     """
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     changed_by = "sync_metadata.py"
 
     if table_name not in existing:
@@ -206,7 +198,10 @@ def upsert_metadata(conn, table_name: str, topic: str, meta: dict,
     else:
         if not meta:
             # doc absent or empty: preserve existing metadata, never overwrite with defaults
-            log.warning(f"  [SKIP] {table_name}: doc field absent in schema, existing metadata preserved")
+            log.warning(
+                f"  [SKIP] {table_name}: doc field absent in schema, "
+                "existing metadata preserved"
+            )
             return "no_change"
 
         current = existing[table_name]
@@ -235,7 +230,10 @@ def upsert_metadata(conn, table_name: str, topic: str, meta: dict,
         }
 
         strategy_changed = any(f == "cdc_strategy" for f, _, _ in changes)
-        previous_strategy = current["cdc_strategy"] if strategy_changed else current.get("previous_strategy")
+        previous_strategy = (
+            current["cdc_strategy"] if strategy_changed
+            else current.get("previous_strategy")
+        )
 
         if not dry_run:
             conn.cursor().execute(f"""

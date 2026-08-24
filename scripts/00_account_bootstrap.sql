@@ -78,6 +78,21 @@ DROP SCHEMA IF EXISTS CDC_POC.PUBLIC;
 -- ── 3. Papel de serviço ──────────────────────────────────────────────────
 USE ROLE SECURITYADMIN;
 
+-- OS TRÊS CONSUMIDORES DESTE PAPEL NÃO SÃO EQUIVALENTES, e isso importa no dia
+-- em que alguém reorganizar as roles.
+--
+-- Dagster e dbt respeitam hierarquia: se amanhã os privilégios abaixo forem
+-- movidos para um papel de acesso e o CDC_ROLE passar a herdá-lo, os dois
+-- continuam funcionando. O sink do Kafka NÃO. A documentação do conector de
+-- alta performance é explícita: "any privileges must be granted directly to the
+-- role used by the connector. Grants cannot be inherited from role hierarchy."
+--   https://docs.snowflake.com/en/connectors/kafkahp/setup-snowflake
+--
+-- Ou seja: uma refatoração de RBAC que pareça correta e que passe em qualquer
+-- teste de dbt quebraria exatamente um dos três consumidores, e o sintoma
+-- apareceria como ingestão parada, não como erro de permissão num build.
+-- Se os grants deste bloco saírem daqui, o papel do conector precisa de cópia
+-- DIRETA deles, não de herança.
 CREATE ROLE IF NOT EXISTS CDC_ROLE
     COMMENT = 'Papel de escrita do pipeline. Dagster, dbt e o sink do Kafka.';
 
@@ -87,8 +102,28 @@ GRANT USAGE     ON WAREHOUSE CDC_WH  TO ROLE CDC_ROLE;
 GRANT OPERATE   ON WAREHOUSE CDC_WH  TO ROLE CDC_ROLE;
 GRANT USAGE     ON DATABASE  CDC_POC TO ROLE CDC_ROLE;
 
+-- CREATE PIPE só aqui, e não é decorativo: sem ele o pipeline NÃO INGERE.
+--
+-- O sink roda `SnowflakeStreamingSinkConnector` (a arquitetura de alta
+-- performance do Snowpipe Streaming) contra `snowflake.schema.name = BRONZE`,
+-- em modo de pipe padrão -- não define pipe próprio. Nesse modo o Snowflake
+-- cria um PIPE por tabela de destino, gerido por ele mesmo, mas quem DISPARA a
+-- criação é a role do conector, e para isso ela precisa deste privilégio.
+-- Verificado em 2026-08-12: os 10 pipes existem na BRONZE, `kind = STREAMING`,
+-- `is_snowflake_managed = true`, `owner = NULL`.
+--
+-- Até 2026-08-12 esta linha não concedia CREATE PIPE, enquanto a conta viva o
+-- tinha desde 2026-08-06. Era a única divergência do script por FALTA -- as
+-- outras são por excesso, com a conta tendo mais do que ele concede. A
+-- consequência era pior que as outras: reconstruir do git produziria dbt e
+-- tasks funcionando, e ingestão morta.
+--
+-- ARMADILHA DE AUDITORIA: `INFORMATION_SCHEMA.PIPES` devolve ZERO linhas para
+-- esses pipes, porque não lista os geridos pelo Snowflake. Só `SHOW PIPES` os
+-- mostra. Auditar pelo INFORMATION_SCHEMA conclui, errado, que não há pipe
+-- nenhum e que este privilégio é inerte.
 GRANT USAGE, CREATE TABLE, CREATE VIEW, CREATE STREAM, CREATE TASK,
-      CREATE STAGE, CREATE PROCEDURE, CREATE FILE FORMAT
+      CREATE STAGE, CREATE PROCEDURE, CREATE FILE FORMAT, CREATE PIPE
     ON SCHEMA CDC_POC.BRONZE TO ROLE CDC_ROLE;
 GRANT USAGE, CREATE TABLE, CREATE VIEW, CREATE STREAM, CREATE TASK,
       CREATE STAGE, CREATE PROCEDURE, CREATE FILE FORMAT
