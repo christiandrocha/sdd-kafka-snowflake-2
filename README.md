@@ -117,7 +117,7 @@ and [Known gaps](#known-gaps-and-unverified-claims) each go deep on one part of 
 | **185 tests**, every one classified by severity rather than by default | 0 errors, 10 warnings — all 10 traced to referential gaps in the source ([ADR-0027](docs/adr/0027_severity_convention.md)) |
 | **Idle costs nothing.** The gate evaluates `SYSTEM$STREAM_HAS_DATA` in Snowflake's control plane; a false answer engages no warehouse | [ADR-0019](docs/adr/0019_streams_and_triggered_tasks_as_the_gate.md); the whole ingestion path measured at 0.0005 credits |
 | **A credit brake exists.** `cdc_poc_monitor` — 20 credits, `MONTHLY`, warehouse level, `NOTIFY` at 50/75%, `SUSPEND` at 90%, `SUSPEND_IMMEDIATE` at 100% | Created 2026-08-11 after verification found the account had no monitor at all ([ADR-0020](docs/adr/0020_resource_monitor_canonicalization.md)) |
-| **Adding a domain needs no code change.** Register the Avro subject with a populated `doc` and the sensor, `CONFIG.TABLE_METADATA` and `resolve_cdc` do the rest | [ADR-0030](docs/adr/0030_avro_and_schema_registry_as_the_contract.md) |
+| **A new domain resolves its own CDC strategy.** Register the Avro subject with a populated `doc`; `sync_metadata.py`, `CONFIG.TABLE_METADATA` and `resolve_cdc` settle its strategy, key and types without editing a macro or a model. Onboarding it end to end still edits eleven files, three of them hardcoded domain lists | [ADR-0030](docs/adr/0030_avro_and_schema_registry_as_the_contract.md) |
 | **CI runs and is green**, on a workflow that needs no Snowflake, Kafka or host | `lint` + `validate`, 2026-08-11 |
 
 ### What is next
@@ -722,8 +722,14 @@ grain. Most of what changed here started as somebody going to look.
 > "The registry is the type authority for the sink, the `BACKWARD` compatibility
 > gate, and — through the Avro `doc` field — the CDC contract itself.
 > `sync_metadata.py` parses it into `CONFIG.TABLE_METADATA`, and `resolve_cdc`
-> reads that. So adding a domain needs no code change: register the subject with a
-> populated `doc` and the pipeline picks it up."
+> reads that, so a new domain gets its strategy, its key and its types without one
+> edit to a macro or a model. What I would not claim is that onboarding is free: it
+> still touches eleven files — the Debezium include list, the sink's topic map, a
+> Stream and a Task, a Bronze model, and three hardcoded domain lists that ought to
+> be derived from `TABLE_METADATA` rather than repeated. Forget the list in
+> `assert_table_metadata_sem_drift` and the build fails loudly, which is the
+> contract working. Forget the other two and nothing tells you. Closing that
+> asymmetry is the next thing I would do."
 
 **On test severity:**
 > "A test is `error` if the violation, propagated, would make a business metric

@@ -61,9 +61,19 @@ documented risk of demoting `FLOAT64` to `NUMBER(38,0)` because the first row
 happened to be whole.
 
 **One boundary, three uses.** Serialization, type authority and processing
-contract all resolve to the same artifact. That is why a new domain needs no code
-change: register the subject with a populated `doc`, and the sensor, the metadata
-table and `resolve_cdc` do the rest.
+contract all resolve to the same artifact. That is why a new domain needs no
+change to `resolve_cdc`, and none to any model, for its CDC strategy to be
+resolved: register the subject with a populated `doc`, and the sensor, the
+metadata table and the macro do the rest.
+
+That is a claim about strategy resolution, not about onboarding. Bringing a
+domain into the pipeline still edits the Debezium `table.include.list`, the
+sink's `topics` and `snowflake.topic2table.map`, a Stream and a Task in
+`streams_and_tasks.sql`, `sources.yml`, a Bronze model, a Silver model, both
+`schema.yml` files, and three hardcoded domain lists — the `static_fallback` in
+`get_table_config`, and the expectations in `assert_table_metadata_sem_drift` and
+`assert_bronze_sem_backlog_do_landing`. Deriving those three from
+`CONFIG.TABLE_METADATA` is the unclosed half of this decision.
 
 ## Alternatives considered
 
