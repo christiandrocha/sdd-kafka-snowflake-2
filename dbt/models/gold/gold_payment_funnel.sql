@@ -5,27 +5,27 @@
     )
 }}
 
--- Gold: funil do ciclo de pagamento -- volume por etapa, conversao em relacao
--- ao topo e em relacao a etapa anterior.
+-- Gold: payment lifecycle funnel -- volume per stage, conversion against the
+-- top of the funnel and against the previous stage.
 --
--- POR QUE 'table' E NAO INCREMENTAL. Razao global pura: toda coluna de
--- percentual depende do total das outras etapas. Nao ha subconjunto de linhas
--- novas que possa ser agregado isoladamente e ainda produzir o numero certo.
--- Full refresh e a materializacao honesta aqui, nao uma preguica.
+-- WHY 'table' AND NOT INCREMENTAL. A pure global ratio: every percentage
+-- column depends on the totals of the other stages. There is no subset of new
+-- rows that can be aggregated in isolation and still produce the right number.
+-- Full refresh is the honest materialization here, not laziness.
 --
--- A ordem das etapas e declarada, nao inferida: alfabetica poria `authorized`
--- antes de `created` e o funil sairia invertido. `refunded` NAO entra na
--- sequencia -- e um desvio do fluxo feliz, nao um degrau dele; entra como
--- coluna a parte, repetida em todas as linhas, para dar contexto sem
--- contaminar as taxas de conversao.
+-- The stage order is declared, not inferred: alphabetical would put
+-- `authorized` before `created` and the funnel would come out inverted.
+-- `refunded` is NOT part of the sequence -- it is a detour from the happy
+-- path, not a step of it; it enters as a separate column, repeated on every
+-- row, to give context without contaminating the conversion rates.
 --
--- Etapa sem nenhum evento aparece com zero, nao some: o LEFT JOIN parte da
--- lista declarada de etapas. Um degrau vazio e justamente o que o funil
--- precisa mostrar.
+-- A stage with no events appears as zero, it does not vanish: the LEFT JOIN
+-- starts from the declared list of stages. An empty step is precisely what the
+-- funnel needs to show.
 --
--- Sobre os dados atuais, ver a nota de cardinalidade em
--- gold_payment_lifecycle.sql: 8 payment_id distintos para 2.210 eventos. As
--- contagens por etapa sao reais; a leitura de "conversao" nao e.
+-- On the current data, see the cardinality note in gold_payment_lifecycle.sql:
+-- 8 distinct payment_ids for 2,210 events. The per-stage counts are real; the
+-- reading of "conversion" is not.
 
 WITH etapas AS (
 

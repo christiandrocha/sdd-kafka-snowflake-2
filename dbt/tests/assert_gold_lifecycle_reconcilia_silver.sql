@@ -1,25 +1,25 @@
--- Reconciliacao Silver -> gold_payment_lifecycle.
+-- Reconciliation of Silver -> gold_payment_lifecycle.
 --
--- POR QUE ESTE TESTE EXISTE
+-- WHY THIS TEST EXISTS
 --
--- Os 185 testes de esquema deste projeto (unique, not_null, accepted_values,
--- relationships) verificam a FORMA do dado. Nenhum deles verifica se a Gold
--- reflete a Silver -- e essa e exatamente a pergunta que um modelo incremental
--- responde errado quando quebra.
+-- The 185 schema tests in this project (unique, not_null, accepted_values,
+-- relationships) verify the SHAPE of the data. None of them verifies that Gold
+-- reflects Silver -- and that is exactly the question an incremental model
+-- answers wrongly when it breaks.
 --
--- Em 2026-08-11 o CTE `alvo` do gold_payment_lifecycle ignorou um evento que
--- chegou fora de ordem. A Silver ficou com 4 eventos para o pagamento
--- 55555555 e a Gold seguiu dizendo 3, com `capturado_em` nulo. Os 26 testes
--- da cadeia passaram e o dbt reportou sucesso. Este teste teria falhado.
+-- On 2026-08-11 the `alvo` CTE of gold_payment_lifecycle ignored an event that
+-- arrived out of order. Silver held 4 events for payment 55555555 and Gold
+-- kept saying 3, with a null `capturado_em`. All 26 tests in the chain passed
+-- and dbt reported success. This test would have failed.
 --
--- O QUE ELE AFIRMA: para todo payment_id, a contagem de eventos e o timestamp
--- do evento mais recente na Gold sao iguais aos da Silver -- e nenhum lado tem
--- pagamento que o outro nao tenha.
+-- WHAT IT ASSERTS: for every payment_id, the event count and the timestamp of
+-- the most recent event in Gold equal those in Silver -- and neither side has
+-- a payment the other does not.
 --
--- FALSO POSITIVO CONHECIDO: uma construcao parcial (`dbt build --select`
--- incluindo a Silver mas nao a Gold, ou o contrario) deixa as duas fora de
--- sincronia legitimamente. Se este teste falhar logo apos um run seletivo,
--- rode o projeto inteiro antes de investigar.
+-- KNOWN FALSE POSITIVE: a partial build (`dbt build --select` including Silver
+-- but not Gold, or the reverse) legitimately leaves the two out of sync. If
+-- this test fails right after a selective run, run the whole project before
+-- investigating.
 
 WITH silver AS (
 

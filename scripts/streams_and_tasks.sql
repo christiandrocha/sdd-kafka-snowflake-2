@@ -1,41 +1,41 @@
 -- ------------------------------------------------------------------------
 -- streams_and_tasks.sql
--- ADR-0019 -- Gate de disparo nativo do Snowflake (Streams + Triggered Tasks)
+-- ADR-0019 -- Snowflake-native trigger gate (Streams + Triggered Tasks)
 --
--- Substitui o polling do bronze_new_data_sensor (que consultava
--- MAX(RECORD_METADATA:CreateTime) nas 19+1 tabelas Bronze a cada 60s,
--- colidindo com AUTO_SUSPEND=60s e mantendo o warehouse praticamente
--- sempre ligado -- o problema original desta analise).
+-- Replaces the polling in bronze_new_data_sensor (which queried
+-- MAX(RECORD_METADATA:CreateTime) across the 19+1 Bronze tables every 60s,
+-- colliding with AUTO_SUSPEND=60s and keeping the warehouse effectively
+-- always on -- the original problem of this analysis).
 --
--- Como funciona:
---   1. Um STREAM por tabela Bronze rastreia mudancas (append-only, ja que
---      o Snowpipe so faz INSERT nessas tabelas).
---   2. Uma TASK por dominio, agendada a cada 1 minuto, com
---      WHEN SYSTEM$STREAM_HAS_DATA(...) -- essa avaliacao e feita pelo
---      control plane do Snowflake e NAO consome o warehouse quando o
---      resultado e FALSE. So quando ha dado novo a task efetivamente
---      dispara, consumindo o warehouse pelo minimo necessario.
---   3. Vantagem estrutural sobre um watcher externo (Kafka): o STREAM e
---      definido sobre a TABELA Bronze real. Ele so pode indicar "tem
---      dado" depois que o Snowpipe ja commitou a linha -- elimina por
---      construcao o gap de "Kafka publicou mas Snowflake ainda nao
---      materializou" identificado na analise da arquitetura do watcher
---      (nao e uma heuristica de debounce, e uma garantia estrutural).
---   4. A task grava em CONFIG.PENDING_RUNS, que o sensor Dagster
---      (ver sensors.py) passa a consultar -- 1 SELECT leve em vez de
---      19-20 SELECT MAX(...) por ciclo.
+-- How it works:
+--   1. One STREAM per Bronze table tracks changes (append-only, since
+--      Snowpipe only INSERTs into those tables).
+--   2. One TASK per domain, scheduled every 1 minute, with
+--      WHEN SYSTEM$STREAM_HAS_DATA(...) -- that evaluation is done by
+--      Snowflake's control plane and does NOT consume the warehouse when
+--      the result is FALSE. Only when there is new data does the task
+--      actually fire, consuming the warehouse for the minimum needed.
+--   3. Structural advantage over an external watcher (Kafka): the STREAM is
+--      defined over the real Bronze TABLE. It can only report "has data"
+--      after Snowpipe has committed the row -- eliminating by construction
+--      the "Kafka published but Snowflake has not materialized yet" gap
+--      identified in the watcher architecture analysis (it is not a
+--      debounce heuristic, it is a structural guarantee).
+--   4. The task writes to CONFIG.PENDING_RUNS, which the Dagster sensor
+--      (see sensors.py) then queries -- 1 light SELECT instead of
+--      19-20 SELECT MAX(...) per cycle.
 --
--- Pre-requisito (rodar uma vez como ACCOUNTADMIN):
+-- Prerequisite (run once as ACCOUNTADMIN):
 --   GRANT EXECUTE TASK ON ACCOUNT TO ROLE CDC_ROLE;
 --
--- NAO TESTADO AO VIVO -- nao ha Snowflake ativo disponivel durante esta
--- analise. Rode em ambiente de teste antes de qualquer demo de cliente.
+-- NOT TESTED LIVE -- no active Snowflake was available during this analysis.
+-- Run it in a test environment before any client demo.
 -- ------------------------------------------------------------------------
 
 USE ROLE CDC_ROLE;
 USE DATABASE CDC_POC;
 
--- -- Tabelas de controle -----------------------------------------------
+-- -- Control tables -----------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS CONFIG.PENDING_RUNS (
     domain      STRING,
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS CONFIG.STREAM_CONSUMPTION_LOG (
     consumed_at  TIMESTAMP_NTZ
 );
 
--- -- Stored procedure compartilhada (DRY -- 1 proc para os 20 dominios) --
+-- -- Shared stored procedure (DRY -- 1 proc for all domains) ------------
 
 CREATE OR REPLACE PROCEDURE CONFIG.SP_GATE_DOMAIN(STREAM_FQN STRING, DOMAIN_NAME STRING)
 RETURNS STRING
@@ -68,7 +68,7 @@ BEGIN
 END;
 $$;
 
--- -- Streams + Tasks -- 1 par por dominio Bronze (v6: so os 10 Tier 1, ADR-0022) --------------------------
+-- -- Streams + Tasks -- 1 pair per Bronze domain (v6: only the 10 Tier 1, ADR-0022) ------------------------
 
 -- ORDERS
 CREATE OR REPLACE STREAM BRONZE.ORDERS_STREAM ON TABLE BRONZE.ORDERS
@@ -200,14 +200,14 @@ AS
 
 ALTER TASK BRONZE.SEARCH_EVENTS_GATE_TASK RESUME;
 
--- -- Verificacao ----------------------------------------------------------
--- Confirma que as 20 tasks estao ativas (nao SUSPENDED):
+-- -- Verification ---------------------------------------------------------
+-- Confirm the tasks are active (not SUSPENDED):
 -- SHOW TASKS IN SCHEMA BRONZE;
 --
--- Confirma historico de execucao (so deve ter linhas quando havia dado
--- novo de verdade -- se aparecer executando a cada 1 min mesmo sem
--- trafego, algo esta errado e o SYSTEM$STREAM_HAS_DATA nao esta
--- funcionando como esperado):
+-- Confirm the execution history (it should only have rows when there was
+-- genuinely new data -- if it shows a run every 1 min with no traffic,
+-- something is wrong and SYSTEM$STREAM_HAS_DATA is not working as
+-- expected):
 -- SELECT * FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
 --     SCHEDULED_TIME_RANGE_START => DATEADD('hour', -6, CURRENT_TIMESTAMP())
 -- )) ORDER BY SCHEDULED_TIME DESC;

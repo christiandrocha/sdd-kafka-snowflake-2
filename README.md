@@ -15,7 +15,10 @@ End-to-end **Change Data Capture** pipeline: PostgreSQL → Debezium → Kafka �
 
 What sets this project apart is not the stack — it is the **control**. Each domain's CDC strategy lives in a metadata table in Snowflake rather than in SQL; pipeline triggering passes through a gate that queries Kafka before waking the warehouse; and every layer's invariants are tested, with severity chosen case by case.
 
-> Source code comments and commit messages are written in Portuguese. This README is in English.
+> Comments and documentation under `dbt/`, `dagster/` and
+> `scripts/streams_and_tasks.sql` are in English. Commit messages, and the
+> comments in the remaining operational scripts (`scripts/*.sql`, CI workflows,
+> compose), are still in Portuguese.
 
 [The problem](#the-problem) · [Architecture](#architecture) · [Cost governance](#cost-governance) · [Data quality](#data-quality) · [Running it](#running-it) · [Known gaps](#known-gaps-and-unverified-claims) · [ADRs](docs/adr/) · [Cheat sheet](#interview-cheat-sheet)
 

@@ -5,36 +5,35 @@
     )
 }}
 
--- Gold: desempenho acumulado por entregador -- turnos, pedidos, distancia,
--- ganhos e derivados (ganho por km, ganho por hora, pedidos por turno).
+-- Gold: cumulative performance per driver -- shifts, orders, distance,
+-- earnings and derived measures (earnings per km, per hour, orders per shift).
 --
--- Categoria: aditivo-particionavel por driver_id. Nao esta incrementalizado
--- de proposito: sao 469 turnos para 355 entregadores, e o full refresh custa
--- menos que a complexidade do watermark. Se o volume de turnos crescer em
--- ordem de grandeza, o caminho e o mesmo padrao de gold_payment_lifecycle --
--- descobrir quais driver_id tiveram turno novo e recalcular so eles por
--- inteiro.
+-- Category: additive-partitionable per driver_id. It is deliberately not
+-- incrementalized: 469 shifts for 355 drivers, and the full refresh costs less
+-- than the complexity of a watermark. If shift volume grows by an order of
+-- magnitude, the path is the same pattern as gold_payment_lifecycle -- find
+-- which driver_ids got a new shift and recompute only those, in full.
 --
--- DUAS ARMADILHAS TRATADAS AQUI:
+-- TWO TRAPS HANDLED HERE:
 --
---   1. Fan-out do cadastro. `silver_drivers` garante unicidade por `uuid`,
---      que e a chave tecnica do CDC -- NAO por `driver_id`, que e a chave de
---      negocio usada na juncao. Se o mesmo entregador existir com dois uuid,
---      o join multiplicaria os turnos dele. Por isso o QUALIFY reduz o
---      cadastro a uma linha por driver_id antes da juncao, usando o mesmo
---      criterio deterministico do resolve_cdc (source_ts_ms, depois
+--   1. Registry fan-out. `silver_drivers` guarantees uniqueness by `uuid`,
+--      which is the CDC technical key -- NOT by `driver_id`, which is the
+--      business key used in the join. If the same driver exists under two
+--      uuids, the join would multiply their shifts. Hence the QUALIFY reduces
+--      the registry to one row per driver_id before the join, using the same
+--      deterministic criterion as resolve_cdc (source_ts_ms, then
 --      kafka_offset).
 --
---   2. Turno sem cadastro. 84 linhas de driver_shifts apontam para driver_id
---      inexistente em drivers (verificado em 2026-08-10, e propriedade da
---      base de origem, nao do pipeline). O LEFT JOIN parte dos TURNOS, entao
---      esses entregadores continuam sendo medidos, com os atributos nulos e
---      a flag `sem_cadastro` ligada. Um INNER JOIN aqui apagaria 84 turnos do
---      relatorio em silencio.
+--   2. Shift with no registry entry. 84 driver_shifts rows point at a
+--      driver_id absent from drivers (verified 2026-08-10; a property of the
+--      source database, not of the pipeline). The LEFT JOIN starts from the
+--      SHIFTS, so those drivers are still measured, with null attributes and
+--      the `sem_cadastro` flag on. An INNER JOIN here would silently erase 84
+--      shifts from the report.
 --
--- `issues_reported` e categorico em texto ('Late Start', 'App Crash', 'Lost
--- GPS', 'Low Battery', 'Accident') e usa a string 'None' para ausencia de
--- problema -- nao NULL. Comparar com NULL nao funcionaria.
+-- `issues_reported` is categorical text ('Late Start', 'App Crash', 'Lost
+-- GPS', 'Low Battery', 'Accident') and uses the string 'None' for no problem
+-- -- not NULL. Comparing against NULL would not work.
 
 WITH entregadores AS (
 

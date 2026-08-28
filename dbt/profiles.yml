@@ -11,10 +11,10 @@ sdd_kafka_snowflake:
       database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
       warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
       schema: SILVER
-      # 8 threads, nao 4. O gargalo do projeto e contagem de statements, nao
-      # volume: sao 26 models e 185 testes, quase todos independentes e curtos.
-      # O X-Small cobra por tempo LIGADO, nao por paralelismo -- terminar em
-      # metade do tempo com o dobro de threads e literalmente metade da conta.
+      # 8 threads, not 4. The bottleneck here is statement count, not volume:
+      # 26 models and 185 tests, nearly all short and independent. An X-Small
+      # bills for time SPENT UP, not for parallelism -- finishing in half the
+      # time with twice the threads is literally half the bill.
       threads: 8
       client_session_keep_alive: false
 

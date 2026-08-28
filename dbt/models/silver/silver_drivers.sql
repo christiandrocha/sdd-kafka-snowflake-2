@@ -5,11 +5,11 @@
     )
 }}
 
--- Silver: entregadores, um por uuid.
--- driver_id (nao o uuid) e o driver_key usado por orders e driver_shifts --
--- o uuid e a chave tecnica do CDC, a juncao de negocio e por driver_id.
+-- Silver: delivery drivers, one per uuid.
+-- driver_id (not the uuid) is the driver_key used by orders and driver_shifts
+-- -- the uuid is the CDC technical key, the business join is on driver_id.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_drivers')) }}

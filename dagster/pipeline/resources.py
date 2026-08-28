@@ -1,16 +1,16 @@
 """
-resources.py — recursos compartilhados do code location.
+resources.py -- shared resources of the code location.
 
-Portado do projeto anterior sem mudança de comportamento. O reexport de
-`SnowflakeResource` aqui é load-bearing: `sensors.py` faz
-`from .resources import SnowflakeResource` para anotar o parâmetro dos dois
-sensores, e é este import que amarra o recurso `snowflake` definido em
-`__init__.py` à assinatura da função.
+Ported from the previous project with no behaviour change. The re-export of
+`SnowflakeResource` here is load-bearing: `sensors.py` does
+`from .resources import SnowflakeResource` to annotate the parameter of both
+sensors, and it is this import that binds the `snowflake` resource defined in
+`__init__.py` to the function signature.
 
-Identidade: as credenciais vêm do `.env` (env_file no docker-compose), que é
-a identidade do STACK — o `DAGSTER_SERVICE_USER`, dono de `keys/dagster_key.p8`.
-As identidades do Cursor e do data-agents NÃO passam por aqui; elas vivem em
-conexões nomeadas no `~/.snowflake/config.toml` do host.
+Identity: credentials come from `.env` (env_file in docker-compose), which is
+the STACK's identity -- `DAGSTER_SERVICE_USER`, owner of `keys/dagster_key.p8`.
+The Cursor and data-agents identities do NOT pass through here; they live in
+named connections in the host's `~/.snowflake/config.toml`.
 """
 
 import os
@@ -37,7 +37,7 @@ snowflake_resource = SnowflakeResource(
     database=os.environ.get("SNOWFLAKE_DATABASE", "CDC_POC"),
 )
 
-# Política de retry para falhas transitórias de rede/Snowflake.
+# Retry policy for transient network/Snowflake failures.
 SNOWFLAKE_RETRY_POLICY = RetryPolicy(
     max_retries=3,
     delay=30,

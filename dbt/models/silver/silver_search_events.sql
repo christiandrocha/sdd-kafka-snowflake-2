@@ -5,23 +5,23 @@
     )
 }}
 
--- Silver: buscas do usuario, uma linha por search_id.
+-- Silver: user searches, one row per search_id.
 --
--- Ate 2026-08-10 este dominio estava registrado como table_type='log' com
--- cdc_strategy='upsert', o que era contraditorio: `log` descreve dominio que
--- preserva DELETE como registro historico, e `upsert` descarta DELETE.
--- Resolvido corrigindo a ETIQUETA, nao a estrategia -- a medicao na origem
--- mostrou 203 linhas para 203 chaves distintas e zero deletes, ou seja,
--- append-only, o mesmo padrao de payment_events, que ja era 'fact'.
+-- Until 2026-08-10 this domain was registered as table_type='log' with
+-- cdc_strategy='upsert', which was contradictory: `log` describes a domain
+-- that preserves DELETE as a historical record, and `upsert` discards DELETE.
+-- Resolved by fixing the LABEL, not the strategy -- measuring at the source
+-- showed 203 rows for 203 distinct keys and zero deletes, i.e. append-only,
+-- the same pattern as payment_events, which was already 'fact'.
 --
--- A estrategia 'upsert' era e continua sendo a certa aqui, e ela e o que da
--- de graca a garantia de unicidade testada em schema.yml. Se um dia a
--- intencao virar auditoria ("quero saber que uma busca foi apagada"),
--- a mudanca e trocar cdc_strategy para 'log' em CONFIG.TABLE_METADATA -- mas
--- ai o `unique` de search_id e o accepted_values de `op` precisam mudar
--- junto, e o gold_user_behavior passa a precisar de deduplicacao propria.
+-- The 'upsert' strategy was and remains the right one here, and it is what
+-- gives the uniqueness guarantee tested in schema.yml for free. If the intent
+-- ever becomes auditing ("I want to know a search was deleted"), the change is
+-- switching cdc_strategy to 'log' in CONFIG.TABLE_METADATA -- but then the
+-- `unique` on search_id and the accepted_values on `op` have to change with
+-- it, and gold_user_behavior starts needing its own deduplication.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_search_events')) }}

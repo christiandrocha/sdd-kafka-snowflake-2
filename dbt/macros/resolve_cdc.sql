@@ -1,58 +1,58 @@
 {% macro resolve_cdc(source_ref, model_name=none) %}
 {#
-    Resolve uma tabela Bronze CDC no estado atual da entidade, para a Silver.
-    A estrategia vem de CONFIG.TABLE_METADATA via get_config_for().
+    Resolve a Bronze CDC table into the entity's current state, for Silver.
+    The strategy comes from CONFIG.TABLE_METADATA via get_config_for().
 
-    Estrategias:
-        upsert -> deduplica por unique_key, mantem a versao mais recente e
-                  descarta linha apagada na origem
-        append -> sem deduplicacao, descarta so a linha apagada
-        log    -> mantem tudo, inclusive delete, como registro historico
+    Strategies:
+        upsert -> deduplicate by unique_key, keep the most recent version and
+                  discard rows deleted at the source
+        append -> no deduplication, discard only the deleted row
+        log    -> keep everything, deletes included, as a historical record
 
-    Contrato de entrada: `source_ref` precisa apontar para um modelo Bronze
-    deste projeto, que expoe as colunas de controle `op`, `source_ts_ms`,
-    `kafka_offset` e `kafka_partition`. Ver dbt/models/bronze/bronze_*.sql.
+    Input contract: `source_ref` must point at a Bronze model of this project,
+    exposing the control columns `op`, `source_ts_ms`, `kafka_offset` and
+    `kafka_partition`. See dbt/models/bronze/bronze_*.sql.
 
-    Uso num modelo Silver:
+    Use in a Silver model:
         {{ resolve_cdc(ref('bronze_orders')) }}
         {{ resolve_cdc(ref('bronze_orders'), model_name='silver_orders_enriched') }}
 
-    PORTE DO PROJETO ANTERIOR (v6, 2026-08-10). Tres mudancas:
+    PORTED FROM THE PREVIOUS PROJECT (v6, 2026-08-10). Three changes:
 
-    1. Desempate deterministico. A versao anterior ordenava so por
-       `source_ts_ms DESC`. Esse campo vem do Debezium em MILISSEGUNDOS: duas
-       mudancas na mesma linha dentro do mesmo milissegundo -- comum em
-       carga em lote e em UPDATE em cascata -- empatam, e o ROW_NUMBER
-       escolhe uma delas de forma nao deterministica. O mesmo `dbt run`
-       rodado duas vezes podia produzir Silver diferente. Agora o desempate
-       segue por `kafka_offset DESC`, que e monotonico por particao, igual ao
-       que os proprios modelos Bronze ja fazem na deduplicacao deles.
+    1. Deterministic tie-break. The previous version ordered only by
+       `source_ts_ms DESC`. Debezium emits that field in MILLISECONDS: two
+       changes to the same row inside the same millisecond -- common in bulk
+       loads and cascading UPDATEs -- tie, and ROW_NUMBER picks one of them
+       non-deterministically. The same `dbt run` executed twice could produce
+       a different Silver. The tie-break now continues on `kafka_offset DESC`,
+       which is monotonic per partition, the same thing the Bronze models
+       already do in their own deduplication.
 
-    2. Filtro de delete a prova de NULL, MAIS descarte de tombstone. Era
-       `op != 'd'`. Em SQL, `NULL != 'd'` e NULL, nao TRUE -- entao qualquer
-       linha com `op` nulo era descartada em silencio, apesar de nao ser um
-       delete. Trocado por `IS DISTINCT FROM`, que trata NULL como valor.
+    2. NULL-safe delete filter, PLUS tombstone discard. It was `op != 'd'`.
+       In SQL, `NULL != 'd'` is NULL, not TRUE -- so any row with a null `op`
+       was silently discarded despite not being a delete. Replaced with
+       `IS DISTINCT FROM`, which treats NULL as a value.
 
-       Mas so essa troca abre um buraco, medido em 2026-08-10: o conector
-       roda com `drop.tombstones=false`, entao todo DELETE produz DUAS
-       mensagens -- a linha reescrita com `__OP='d'` e, logo depois, um
-       tombstone (valor nulo) que o sink materializa como uma linha de
-       colunas todas nulas, unique_key inclusive. Com `op != 'd'` esse lixo
-       sumia por acidente (NULL != 'd' e NULL); com `IS DISTINCT FROM` ele
-       passava a vazar para a Silver. Dai o `{{ id_col }} IS NOT NULL`: uma
-       linha sem chave de negocio nao e um registro CDC, e um artefato do
-       protocolo de compactacao do Kafka. O descarte agora e explicito e
-       intencional, nao um efeito colateral de semantica de NULL.
+       But that change alone opens a hole, measured on 2026-08-10: the
+       connector runs with `drop.tombstones=false`, so every DELETE produces
+       TWO messages -- the row rewritten with `__OP='d'` and, right after, a
+       tombstone (null value) that the sink materializes as a row of all-null
+       columns, unique_key included. Under `op != 'd'` that garbage vanished
+       by accident (NULL != 'd' is NULL); under `IS DISTINCT FROM` it started
+       leaking into Silver. Hence the `{{ id_col }} IS NOT NULL`: a row with
+       no business key is not a CDC record, it is an artifact of Kafka's
+       compaction protocol. The discard is now explicit and intentional, not
+       a side effect of NULL semantics.
 
-    3. A coluna auxiliar de ranking sai do resultado via EXCLUDE, como antes,
-       mas as colunas de controle CDC (`op`, `source_ts_ms`, `kafka_*`)
-       PERMANECEM na Silver de proposito: sao a linhagem que liga a linha ao
-       evento Kafka que a produziu, e o `gold_payment_lifecycle` do projeto
-       anterior dependia delas.
+    3. The ranking helper column leaves the result via EXCLUDE, as before, but
+       the CDC control columns (`op`, `source_ts_ms`, `kafka_*`) REMAIN in
+       Silver on purpose: they are the lineage tying each row to the Kafka
+       event that produced it, and the previous project's
+       `gold_payment_lifecycle` depended on them.
 
-    NAO CONFUNDIR com a deduplicacao dos modelos Bronze. La ela e por lote de
-    ingestao (idempotencia sobre reentrega do Snowpipe Streaming); aqui e
-    sobre o historico inteiro da entidade (colapsar N versoes em 1 estado).
+    NOT TO BE CONFUSED with the deduplication in the Bronze models. There it is
+    per ingestion batch (idempotency over Snowpipe Streaming redelivery); here
+    it is over the entity's whole history (collapsing N versions into 1 state).
 #}
 
 {% set calling_model = model_name or this.name %}
@@ -62,7 +62,7 @@
 
 {% if strategy == 'upsert' %}
 
-    {# Entidade: uma linha por chave, o estado mais recente nao apagado. #}
+    {# Entity: one row per key, the most recent non-deleted state. #}
     WITH ranked AS (
         SELECT
             *,
@@ -80,7 +80,7 @@
 
 {% elif strategy == 'append' %}
 
-    {# Fato: toda linha vale, sem deduplicar; so delete e tombstone saem. #}
+    {# Fact: every row counts, no deduplication; only delete and tombstone go. #}
     SELECT *
     FROM {{ source_ref }}
     WHERE op IS DISTINCT FROM 'd'
@@ -88,8 +88,8 @@
 
 {% elif strategy == 'log' %}
 
-    {# Log/auditoria: nada e descartado, delete inclusive -- so o tombstone,
-       que nao carrega informacao nenhuma (nem sequer qual chave morreu). #}
+    {# Log/audit: nothing is discarded, deletes included -- only the tombstone,
+       which carries no information at all (not even which key died). #}
     SELECT *
     FROM {{ source_ref }}
     WHERE {{ id_col }} IS NOT NULL
@@ -97,9 +97,9 @@
 {% else %}
 
     {{ exceptions.raise_compiler_error(
-        "cdc_strategy '" ~ strategy ~ "' desconhecida para o modelo "
-        ~ calling_model ~ ". Valores validos: upsert | append | log. "
-        ~ "Confira CONFIG.TABLE_METADATA ou rode scripts/sync_metadata.py."
+        "unknown cdc_strategy '" ~ strategy ~ "' for model "
+        ~ calling_model ~ ". Valid values: upsert | append | log. "
+        ~ "Check CONFIG.TABLE_METADATA or run scripts/sync_metadata.py."
     ) }}
 
 {% endif %}

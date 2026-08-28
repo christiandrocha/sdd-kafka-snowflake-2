@@ -8,19 +8,19 @@
     )
 }}
 
--- Gold: volume por etapa do ciclo de pagamento. Uma linha por event_name.
+-- Gold: volume per payment lifecycle stage. One row per event_name.
 --
--- POR QUE INCREMENTAL SEM WATERMARK. Esta e uma agregacao de RAZAO GLOBAL: o
--- percentual de cada etapa depende do total de eventos, entao nao existe
--- recorte incremental correto -- filtrar por evento novo mudaria o
--- denominador e produziria percentual errado. O que o incremental resolve
--- aqui e outra coisa: a tabela tem 7 linhas de cardinalidade fixa, e o MERGE
--- por event_name as atualiza no lugar, preservando a identidade de cada
--- linha entre execucoes em vez de derrubar e recriar a tabela.
+-- WHY INCREMENTAL WITHOUT A WATERMARK. This is a GLOBAL RATIO aggregation: the
+-- percentage of each stage depends on the total event count, so there is no
+-- correct incremental slice -- filtering by new events would change the
+-- denominator and produce a wrong percentage. What the incremental solves here
+-- is something else: the table has 7 rows of fixed cardinality, and the MERGE
+-- on event_name updates them in place, preserving each row's identity across
+-- runs instead of dropping and recreating the table.
 --
--- Ou seja: varredura completa a cada run, por necessidade aritmetica; MERGE
--- por estabilidade da chave. Sobre 2.210 eventos isso e irrelevante em custo.
--- Se um dia a cardinalidade de event_name explodir, a decisao muda.
+-- In short: a full scan on every run, by arithmetic necessity; MERGE for key
+-- stability. Over 2,210 events that is irrelevant in cost. If the cardinality
+-- of event_name ever explodes, the decision changes.
 
 WITH base AS (
 

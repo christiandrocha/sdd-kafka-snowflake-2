@@ -5,19 +5,19 @@
     )
 }}
 
--- Silver: eventos do ciclo de pagamento, um por event_id.
--- Ciclo: created -> authorized -> captured -> succeeded -> settled -> closed
---                                          -> refunded -> closed
+-- Silver: payment lifecycle events, one per event_id.
+-- Cycle: created -> authorized -> captured -> succeeded -> settled -> closed
+--                                         -> refunded -> closed
 --
--- Event sourcing: cada event_id e imutavel por natureza, entao o 'upsert'
--- aqui nao colapsa historico de negocio -- ele so garante idempotencia
--- contra reentrega. Os multiplos eventos de um mesmo payment_id continuam
--- todos presentes, que e o que o gold_payment_lifecycle consome.
+-- Event sourcing: each event_id is immutable by nature, so the 'upsert' here
+-- does not collapse business history -- it only guarantees idempotency against
+-- redelivery. The many events of a single payment_id all remain present, which
+-- is what gold_payment_lifecycle consumes.
 --
--- Campos ja desaninhados na Bronze (event_name, event_timestamp) vem junto:
--- resolve_cdc faz SELECT *, nao reprojeta colunas.
+-- Fields already unnested in Bronze (event_name, event_timestamp) come along:
+-- resolve_cdc does SELECT *, it does not reproject columns.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_payment_events')) }}

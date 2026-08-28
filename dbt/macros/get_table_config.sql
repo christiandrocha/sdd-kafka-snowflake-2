@@ -1,8 +1,8 @@
 {% macro get_table_config() %}
 {#
-    Le CONFIG.TABLE_METADATA e devolve um dict indexado por table_name.
+    Reads CONFIG.TABLE_METADATA and returns a dict keyed by table_name.
 
-    Formato de retorno:
+    Return shape:
     {
         'orders': {
             'table_type':   'entity',
@@ -13,36 +13,36 @@
         ...
     }
 
-    PORTE DO PROJETO ANTERIOR (v6, 2026-08-10). Duas mudancas:
+    PORTED FROM THE PREVIOUS PROJECT (v6, 2026-08-10). Two changes:
 
-    1. O fallback estatico caiu de 20 para 10 dominios. Os 10 Tier 2
-       (payments, gps_events, order_status, routes, receipts,
-       support_tickets, products, menu_sections, ratings, inventory) sairam
-       do pipeline inteiro por DEFINE_MIGRACAO_INGESTAO_V4 -- nao ha tabela
-       no Postgres fonte, topico no Kafka, Stream no Snowflake nem modelo
-       Bronze para nenhum deles. Manter os 20 aqui faria a macro devolver
-       config para dominio inexistente, e o modelo Silver que a consultasse
-       compilaria contra uma fonte que nao existe.
+    1. The static fallback dropped from 20 domains to 10. The 10 Tier 2 ones
+       (payments, gps_events, order_status, routes, receipts, support_tickets,
+       products, menu_sections, ratings, inventory) left the pipeline entirely
+       under DEFINE_MIGRACAO_INGESTAO_V4 -- there is no source table in
+       Postgres, no Kafka topic, no Snowflake Stream and no Bronze model for
+       any of them. Keeping all 20 here would make the macro return config for
+       a domain that does not exist, and the Silver model consulting it would
+       compile against a source that is not there.
 
-    2. Os 10 abaixo batem 1:1 com o seed de scripts/bootstrap_config.sql.
-       Se os dois divergirem, TABLE_METADATA vence em tempo de execucao --
-       o fallback so age quando nao ha conexao (parse) ou quando o dominio
-       ainda nao foi registrado.
+    2. The 10 below match the seed in scripts/bootstrap_config.sql one to one.
+       If the two diverge, TABLE_METADATA wins at runtime -- the fallback only
+       acts when there is no connection (parse) or when the domain has not been
+       registered yet.
 
-    POR QUE O FALLBACK EXISTE: o entrypoint do Dagster roda `dbt parse`, que
-    e offline. Sem conexao, `execute` e False e `run_query` nao pode rodar.
-    Sem fallback, o `unique_key` do config() do modelo sairia vazio no
-    manifest e a estrategia merge do incremental perderia a chave.
+    WHY THE FALLBACK EXISTS: the Dagster entrypoint runs `dbt parse`, which is
+    offline. With no connection, `execute` is False and `run_query` cannot run.
+    Without the fallback, the model's `unique_key` would come out empty in the
+    manifest and the incremental merge strategy would lose its key.
 
-    Uso num modelo:
+    Use in a model:
         {% set cfg = get_config_for(this.name) %}
         {% set unique_key = cfg.get('unique_key') %}
 #}
 
-{# Cache por execucao. `context` nao e uma API publica do dbt e pode nao    #}
-{# existir dependendo da versao, entao o acesso e sempre guardado por       #}
-{# `is defined`: se nao existir, a macro apenas reconsulta -- sao 10 linhas #}
-{# numa tabela de controle, com o warehouse ja ligado pelo proprio dbt run. #}
+{# Per-run cache. `context` is not a public dbt API and may not exist        #}
+{# depending on the version, so access is always guarded by `is defined`:    #}
+{# if it does not exist the macro simply re-queries -- 10 rows on a control  #}
+{# table, with the warehouse already up from the `dbt run` itself.           #}
 {% if context is defined and '_table_config_cache' in context %}
     {{ return(context._table_config_cache) }}
 {% endif %}
@@ -88,7 +88,7 @@
     }) %}
 {% endfor %}
 
-{# Dominio ainda nao registrado em TABLE_METADATA cai no fallback. #}
+{# A domain not yet registered in TABLE_METADATA falls back to the static map. #}
 {% for k, v in static_fallback.items() %}
     {% if k not in config_dict %}
         {% set _ = config_dict.update({k: v}) %}
@@ -106,10 +106,10 @@
 
 {% macro get_config_for(model_name) %}
 {#
-    Config de um dominio so. Tira o prefixo de camada para achar o nome da
-    tabela: silver_orders -> orders.
+    Config for a single domain. Strips the layer prefix to find the table name:
+    silver_orders -> orders.
 
-    Uso:
+    Use:
         {% set cfg = get_config_for('silver_orders') %}
         {% set strategy = cfg.get('cdc_strategy') %}
 #}
@@ -129,12 +129,12 @@
 
 {% if clean_name not in all_config %}
     {{ log(
-        "AVISO: '" ~ clean_name ~ "' nao esta em CONFIG.TABLE_METADATA nem no "
-        ~ "fallback estatico de get_table_config. Usando defaults: "
-        ~ default_config | tojson ~ ". Se o dominio e novo, rode "
-        ~ "scripts/sync_metadata.py; se e um modelo derivado (ex: "
-        ~ "silver_orders_enriched), passe model_name explicitamente para "
-        ~ "resolve_cdc apontando o dominio de origem.",
+        "WARNING: '" ~ clean_name ~ "' is in neither CONFIG.TABLE_METADATA nor the "
+        ~ "static fallback of get_table_config. Using defaults: "
+        ~ default_config | tojson ~ ". If the domain is new, run "
+        ~ "scripts/sync_metadata.py; if it is a derived model (e.g. "
+        ~ "silver_orders_enriched), pass model_name explicitly to "
+        ~ "resolve_cdc pointing at the source domain.",
         info=true
     ) }}
 {% endif %}

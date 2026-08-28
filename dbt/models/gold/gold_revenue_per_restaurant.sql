@@ -5,32 +5,33 @@
     )
 }}
 
--- Gold: receita e mix de produto por restaurante.
+-- Gold: revenue and product mix per restaurant.
 --
--- DE ONDE VEM A RECEITA, E POR QUE NAO DE `orders`. Havia dois caminhos:
--- somar `orders.total_amount` agrupando por `restaurant_key` (CNPJ), ou somar
--- `order_items.subtotal` agrupando por `restaurant_id` (inteiro). Escolhido o
--- segundo, por tres motivos:
+-- WHERE REVENUE COMES FROM, AND WHY NOT FROM `orders`. There were two paths:
+-- sum `orders.total_amount` grouped by `restaurant_key` (CNPJ), or sum
+-- `order_items.subtotal` grouped by `restaurant_id` (integer). The second was
+-- chosen, for three reasons:
 --
---   1. Granularidade. O item carrega quantidade, desconto, preco unitario,
---      combo e categoria -- e o mix de produto e metade do que este modelo
---      existe para responder. `orders.total_amount` e um numero opaco.
---   2. Populacao. Sao 210.002 itens contra 414 pedidos nesta base. Agregar
---      pelos pedidos daria um retrato de amostra minuscula.
---   3. Consistencia de chave. Item liga a restaurante por `restaurant_id`,
---      que e a mesma chave dos dois lados; pedido liga por CNPJ, e ai a
---      juncao depende de uma coluna de texto.
+--   1. Granularity. The item carries quantity, discount, unit price, combo and
+--      category -- and product mix is half of what this model exists to
+--      answer. `orders.total_amount` is an opaque number.
+--   2. Population. 210,002 items against 414 orders in this database.
+--      Aggregating by orders would give a picture of a tiny sample.
+--   3. Key consistency. An item links to a restaurant by `restaurant_id`,
+--      which is the same key on both sides; an order links by CNPJ, and then
+--      the join depends on a text column.
 --
--- A consequencia: `receita_bruta` aqui e a soma dos itens, e NAO reconcilia
--- com a soma de `orders.total_amount`. Sao duas medidas diferentes, nao um
--- erro de uma delas -- 7.246 itens sequer tem pedido correspondente na base
--- de origem (propriedade do dado semeado, verificada em 2026-08-10).
+-- The consequence: `receita_bruta` here is the sum of items, and does NOT
+-- reconcile with the sum of `orders.total_amount`. They are two different
+-- measures, not an error in one of them -- 7,246 items do not even have a
+-- matching order in the source database (a property of the seeded data,
+-- verified 2026-08-10).
 --
--- Fan-out e orfaos tratados como em gold_driver_performance: QUALIFY reduz o
--- cadastro a uma linha por restaurant_id antes da juncao (a unicidade
--- garantida em silver_restaurants e por `uuid`, nao por `restaurant_id`), e o
--- LEFT JOIN parte dos ITENS, para que os 370 itens de restaurante nao
--- cadastrado continuem contabilizados com a flag `sem_cadastro`.
+-- Fan-out and orphans handled as in gold_driver_performance: QUALIFY reduces
+-- the registry to one row per restaurant_id before the join (the uniqueness
+-- guaranteed in silver_restaurants is by `uuid`, not by `restaurant_id`), and
+-- the LEFT JOIN starts from the ITEMS, so the 370 items from an unregistered
+-- restaurant stay counted with the `sem_cadastro` flag.
 
 WITH restaurantes AS (
 

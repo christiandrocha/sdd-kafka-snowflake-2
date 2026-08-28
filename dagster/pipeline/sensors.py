@@ -1,55 +1,55 @@
 """
-sensors.py — v5 (pós-diagnóstico de consumo de créditos)
+sensors.py — v5 (after the credit-consumption diagnosis)
 
-MUDANÇAS EM RELAÇÃO À VERSÃO ANTERIOR:
+CHANGES RELATIVE TO THE PREVIOUS VERSION:
 
 1. bronze_new_data_sensor
-   Antes: a cada 60s, abria conexão Snowflake e rodava até 20
-   `SELECT MAX(RECORD_METADATA:CreateTime)` — um por tabela Bronze — para
-   decidir se disparava o dbt run. Como AUTO_SUSPEND do warehouse CDC_WH é
-   60s, o warehouse nunca tinha uma janela real de inatividade e ficava
-   praticamente sempre ligado (~24 créditos/dia em atividade zero).
+   Before: every 60s it opened a Snowflake connection and ran up to 20
+   `SELECT MAX(RECORD_METADATA:CreateTime)` -- one per Bronze table -- to
+   decide whether to trigger the dbt run. Since AUTO_SUSPEND on the CDC_WH
+   warehouse is 60s, the warehouse never had a real window of inactivity and
+   stayed effectively always on (~24 credits/day at zero activity).
 
-   Agora: consulta só CONFIG.PENDING_RUNS (populada pelas Tasks nativas do
-   Snowflake — ver scripts/streams_and_tasks.sql, ADR-0019). É 1 SELECT
-   leve em vez de 20, e o Snowflake só grava linhas ali quando
-   SYSTEM$STREAM_HAS_DATA já confirmou dado real na tabela Bronze, não uma
-   suposição.
+   Now: it queries only CONFIG.PENDING_RUNS (populated by Snowflake's native
+   Tasks -- see scripts/streams_and_tasks.sql, ADR-0019). That is 1 light
+   SELECT instead of 20, and Snowflake only writes rows there once
+   SYSTEM$STREAM_HAS_DATA has confirmed real data in a Bronze table, not a
+   guess.
 
-   CORREÇÃO (2026-08-10, medida contra a conta real): a versão anterior
-   deste docstring afirmava que o intervalo podia continuar em 60s "porque
-   a query em si é trivial". O peso da query não é a variável relevante.
-   QUALQUER query numa tabela real resume o warehouse, e o Snowflake cobra
-   um mínimo de 60 segundos por resume. Com CDC_WH em AUTO_SUSPEND=60 e o
-   sensor consultando a cada 60s, o faturamento vira contínuo: ~1.440
-   resumes/dia x 60s = 24h de X-Small = ~24 créditos/dia — exatamente o
-   número que motivou esta feature. O gate nativo (Streams+Tasks) não é
-   desfeito no lado do Snowflake, mas era desfeito pelo sensor do lado de
-   fora.
+   CORRECTION (2026-08-10, measured against the real account): the previous
+   version of this docstring claimed the interval could stay at 60s "because
+   the query itself is trivial". The weight of the query is not the relevant
+   variable. ANY query on a real table resumes the warehouse, and Snowflake
+   bills a 60-second minimum per resume. With CDC_WH at AUTO_SUSPEND=60 and
+   the sensor querying every 60s, billing becomes continuous: ~1,440
+   resumes/day x 60s = 24h of X-Small = ~24 credits/day -- exactly the number
+   that motivated this feature. The native gate (Streams+Tasks) is not undone
+   on the Snowflake side, but it was undone by the sensor from the outside.
 
-   Por isso o sensor agora usa o MESMO gate de custo zero do
-   registry_new_subject_sensor: consulta o Prometheus antes, e só abre
-   conexão Snowflake se houve mensagem nova no Kafka desde o último ciclo
-   (ou se o Prometheus estiver fora — fail-open). Em repouso o sensor não
-   toca o warehouse nenhuma vez, e o custo fica onde deveria: nas Tasks,
-   que só disparam com dado de verdade.
+   Hence the sensor now uses the SAME zero-cost gate as
+   registry_new_subject_sensor: it queries Prometheus first, and only opens a
+   Snowflake connection if there was a new message in Kafka since the last
+   cycle (or if Prometheus is down -- fail-open). At rest the sensor does not
+   touch the warehouse at all, and the cost sits where it should: on the
+   Tasks, which only fire on real data.
 
 2. registry_new_subject_sensor
-   Antes: consultava CONFIG.TABLE_METADATA no Snowflake a cada 300s,
-   incondicionalmente — contrariando a suposição inicial (documentada nesta
-   mesma análise) de que esse sensor não tocava o Snowflake.
+   Before: it queried CONFIG.TABLE_METADATA in Snowflake every 300s,
+   unconditionally -- contradicting the initial assumption (documented in this
+   same analysis) that this sensor did not touch Snowflake.
 
-   Agora: primeiro consulta o Prometheus (custo zero em créditos Snowflake)
-   para saber se algum tópico teve atividade desde o último ciclo. Só abre
-   conexão Snowflake se houver sinal de atividade — fail-open se o
-   Prometheus estiver inacessível (prioriza nunca perder um subject novo
-   sobre nunca gastar crédito à toa, coerente com a decisão registrada em
-   ADR-0019).
+   Now: it queries Prometheus first (zero cost in Snowflake credits) to learn
+   whether any topic had activity since the last cycle. It only opens a
+   Snowflake connection if there is a sign of activity -- fail-open if
+   Prometheus is unreachable (prioritising never missing a new subject over
+   never spending a credit needlessly, consistent with the decision recorded
+   in ADR-0019).
 
-STATUS (2026-08-10): validado contra a conta Snowflake real, o Kafka e o
-Prometheus do stack local. A validação encontrou dois defeitos que a análise
-estática não pegaria — nome de métrica inexistente no gate do Prometheus e
-o custo do próprio sensor — ambos corrigidos e anotados no ponto do código.
+STATUS (2026-08-10): validated against the real Snowflake account, the Kafka
+and the Prometheus of the local stack. Validation found two defects that static
+analysis would not have caught -- a metric name that does not exist in the
+Prometheus gate, and the cost of the sensor itself -- both fixed and annotated
+at the point in the code.
 """
 
 import json
@@ -70,35 +70,37 @@ from .resources import SnowflakeResource
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 
-# CORREÇÃO (2026-08-10): a constante anterior era
-# `kafka_server_brokertopicmetrics_messagesin_total`, com sufixo `_total`.
-# Essa métrica NÃO existe neste stack — o jmx-exporter publica
-# `kafka_server_brokertopicmetrics_messagesin` (sem sufixo). A query retornava
-# lista vazia, o gate caía no fail-open de "sem série nenhuma" e o
-# registry_new_subject_sensor tocava o Snowflake em TODOS os ciclos desde
-# sempre. Verificado contra /api/v1/label/__name__/values do Prometheus.
+# CORRECTION (2026-08-10): the previous constant was
+# `kafka_server_brokertopicmetrics_messagesin_total`, with a `_total` suffix.
+# That metric does NOT exist in this stack -- the jmx-exporter publishes
+# `kafka_server_brokertopicmetrics_messagesin` (no suffix). The query returned
+# an empty list, the gate fell into the "no series at all" fail-open and
+# registry_new_subject_sensor touched Snowflake on EVERY cycle, from the start.
+# Verified against Prometheus's /api/v1/label/__name__/values.
 #
-# O filtro por tópico também é necessário: das 4 séries publicadas em repouso,
-# as 4 são internas (__consumer_offsets, _schemas, connect_configs,
-# connect_statuses). connect_statuses recebe heartbeat do Kafka Connect, então
-# sem filtro o gate leria trânsito de infraestrutura como dado CDC novo.
+# The topic filter is necessary too: of the 4 series published at rest, all 4
+# are internal (__consumer_offsets, _schemas, connect_configs,
+# connect_statuses). connect_statuses receives a heartbeat from Kafka Connect,
+# so without the filter the gate would read infrastructure traffic as new CDC
+# data.
 CDC_TOPIC_PATTERN = os.getenv("CDC_TOPIC_PATTERN", "pg[.]public[.].*")
 KAFKA_MESSAGES_METRIC = (
     f'kafka_server_brokertopicmetrics_messagesin{{topic=~"{CDC_TOPIC_PATTERN}"}}'
 )
 
-# Quantos ciclos o bronze_new_data_sensor segue checando o Snowflake depois da
-# última atividade vista no Kafka. Existe porque as duas pontas são assíncronas:
-# a mensagem chega no Kafka num ciclo, mas a Task nativa só grava PENDING_RUNS
-# até 1 minuto depois. Sem essa margem, a última linha de uma rajada ficaria
-# sem consumo até a próxima mensagem — que num período parado pode não vir.
+# How many cycles bronze_new_data_sensor keeps checking Snowflake after the
+# last activity seen in Kafka. It exists because the two ends are asynchronous:
+# the message arrives in Kafka on one cycle, but the native Task only writes
+# PENDING_RUNS up to a minute later. Without that margin, the last row of a
+# burst would go unconsumed until the next message -- which in a quiet period
+# may never come.
 HOT_CYCLES_AFTER_ACTIVITY = 3
 
 
-# ── Gate de custo zero: Prometheus antes de qualquer conexão Snowflake ────
+# ── Zero-cost gate: Prometheus before any Snowflake connection ───────────
 
 def _get_kafka_message_totals() -> dict:
-    """Custo zero em créditos Snowflake — só HTTP local ao Prometheus."""
+    """Zero cost in Snowflake credits -- only local HTTP to Prometheus."""
     resp = requests.get(
         f"{PROMETHEUS_URL}/api/v1/query",
         params={"query": KAFKA_MESSAGES_METRIC},
@@ -111,31 +113,31 @@ def _get_kafka_message_totals() -> dict:
 
 def _kafka_had_activity(context, last_totals: dict, initialized: bool) -> tuple:
     """
-    (houve_atividade, totais_atuais) — sem tocar o Snowflake.
+    (had_activity, current_totals) -- without touching Snowflake.
 
-    Fail-open em duas situações, ambas onde perder um disparo é pior que
-    gastar um resume do warehouse:
+    Fail-open in two situations, both where missing a trigger is worse than
+    spending one warehouse resume:
 
-    1. Prometheus inacessível.
-    2. Primeiro tick com este cursor (`initialized=False`). Pode haver linha
-       em PENDING_RUNS gravada antes de o sensor existir, ou antes de um
-       restart do broker que zerou os contadores.
+    1. Prometheus unreachable.
+    2. First tick with this cursor (`initialized=False`). There may be a row in
+       PENDING_RUNS written before the sensor existed, or before a broker
+       restart that zeroed the counters.
 
-    Note que a condição do item 2 é "o cursor está vazio", NÃO "a query veio
-    vazia". Nenhuma série `pg.public.*` existe até a primeira mensagem CDC
-    do broker atual, e tratar isso como fail-open manteria o sensor batendo
-    no Snowflake para sempre — que foi exatamente o defeito medido em
-    2026-08-10.
+    Note that the condition in item 2 is "the cursor is empty", NOT "the query
+    came back empty". No `pg.public.*` series exists until the first CDC
+    message from the current broker, and treating that as fail-open would keep
+    the sensor hitting Snowflake forever -- which was exactly the defect
+    measured on 2026-08-10.
 
-    Reset de contador (restart do broker) conta como atividade: a série some
-    ou volta menor, e a comparação é `!=`, não `>`.
+    A counter reset (broker restart) counts as activity: the series disappears
+    or comes back smaller, and the comparison is `!=`, not `>`.
     """
     try:
         current = _get_kafka_message_totals()
     except Exception as e:
-        context.log.warning(f"Prometheus indisponível ({e}) — fail-open, checa o Snowflake.")
-        # Preserva os totais antigos: quando o Prometheus voltar, o delta é
-        # medido contra o último valor realmente observado.
+        context.log.warning(f"Prometheus unavailable ({e}) -- fail-open, checking Snowflake.")
+        # Keep the old totals: when Prometheus comes back, the delta is
+        # measured against the last value actually observed.
         return True, last_totals
 
     if not initialized:
@@ -148,7 +150,7 @@ def _kafka_had_activity(context, last_totals: dict, initialized: bool) -> tuple:
     return changed, current
 
 
-# ── Bronze: gate nativo (Streams + Tasks) já fez o trabalho pesado ────────
+# ── Bronze: the native gate (Streams + Tasks) already did the heavy work ──
 
 @sensor(
     job=cdc_pipeline_job,
@@ -157,34 +159,34 @@ def _kafka_had_activity(context, last_totals: dict, initialized: bool) -> tuple:
 )
 def bronze_new_data_sensor(context, snowflake: SnowflakeResource) -> SensorResult:
     """
-    Consulta CONFIG.PENDING_RUNS — populada pelas Tasks nativas do
-    Snowflake (scripts/streams_and_tasks.sql), que só rodam quando
-    SYSTEM$STREAM_HAS_DATA confirma dado real numa tabela Bronze.
+    Queries CONFIG.PENDING_RUNS -- populated by Snowflake's native Tasks
+    (scripts/streams_and_tasks.sql), which only run when
+    SYSTEM$STREAM_HAS_DATA confirms real data in a Bronze table.
 
-    CORREÇÃO (comparação com segunda opinião externa, 2026-08-04):
-    a versão anterior filtrava por `detected_at > cursor` ALÉM de
-    `consumed = FALSE`. Isso reintroduzia o mesmo bug de watermark global
-    que motivou trocar o sensor original: se um domínio de alto volume
-    grava um `detected_at` mais recente e avança o cursor, um domínio de
-    baixo volume cuja Task só termina de rodar depois (gravando um
-    `detected_at` mais antigo que o cursor já avançado) fica invisível
-    pra sempre — `consumed` continua FALSE, mas `detected_at > cursor`
-    nunca bate. `consumed = FALSE` sozinho já é suficiente como guarda de
-    idempotência; a comparação de cursor era redundante E perigosa.
-    Removida — nenhuma linha de PENDING_RUNS é mais filtrada por tempo.
+    CORRECTION (compared against an external second opinion, 2026-08-04):
+    the previous version filtered by `detected_at > cursor` ON TOP OF
+    `consumed = FALSE`. That reintroduced the same global-watermark bug that
+    motivated replacing the original sensor: if a high-volume domain writes a
+    more recent `detected_at` and advances the cursor, a low-volume domain
+    whose Task only finishes later (writing a `detected_at` older than the
+    already-advanced cursor) becomes invisible forever -- `consumed` stays
+    FALSE, but `detected_at > cursor` never matches. `consumed = FALSE` alone
+    is already sufficient as an idempotency guard; the cursor comparison was
+    redundant AND dangerous. Removed -- no row of PENDING_RUNS is filtered by
+    time any more.
 
-    O `context.cursor` voltou a ser usado (2026-08-10), mas para outra
-    coisa: guarda os contadores do Kafka do gate de custo e o contador de
-    ciclos quentes. Ele NÃO filtra linha nenhuma de PENDING_RUNS — quando o
-    sensor decide consultar, lê todas as linhas com `consumed = FALSE`, sem
-    corte de tempo. O bug de watermark não volta por aqui.
+    `context.cursor` came back into use (2026-08-10), but for something else:
+    it holds the Kafka counters of the cost gate and the hot-cycle counter. It
+    does NOT filter any row of PENDING_RUNS -- when the sensor decides to
+    query, it reads every row with `consumed = FALSE`, with no time cut. The
+    watermark bug does not come back through here.
     """
     state = json.loads(context.cursor or "{}")
     last_totals = state.get("totals", {})
     hot = state.get("hot", 0)
     initialized = state.get("initialized", False)
 
-    # Fase 1 — custo zero: nenhuma conexão Snowflake, nenhum resume do CDC_WH.
+    # Phase 1 -- zero cost: no Snowflake connection, no CDC_WH resume.
     activity, current_totals = _kafka_had_activity(context, last_totals, initialized)
 
     if activity:
@@ -194,14 +196,14 @@ def bronze_new_data_sensor(context, snowflake: SnowflakeResource) -> SensorResul
     else:
         return SensorResult(
             skip_reason=SkipReason(
-                "Sem atividade no Kafka (via Prometheus) — Snowflake não consultado."
+                "No Kafka activity (via Prometheus) -- Snowflake not queried."
             ),
             cursor=json.dumps({"totals": current_totals, "hot": 0, "initialized": True}),
         )
 
     new_cursor = json.dumps({"totals": current_totals, "hot": hot, "initialized": True})
 
-    # Fase 2 — só agora toca o Snowflake.
+    # Phase 2 -- only now does it touch Snowflake.
     with snowflake.get_connection() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -216,16 +218,16 @@ def bronze_new_data_sensor(context, snowflake: SnowflakeResource) -> SensorResul
 
         if not rows:
             return SensorResult(
-                skip_reason=SkipReason("CONFIG.PENDING_RUNS sem entradas novas."),
+                skip_reason=SkipReason("CONFIG.PENDING_RUNS has no new entries."),
                 cursor=new_cursor,
             )
 
         domains = sorted({r[0] for r in rows})
         newest_ts = max(r[1] for r in rows)
 
-        # Marca como consumido pelo PRIMARY KEY implícito da linha, não por
-        # um corte de tempo — evita marcar como consumida uma linha que
-        # ainda não tinha sido lida (mesma classe de bug do cursor acima).
+        # Marks as consumed by the row's implicit PRIMARY KEY, not by a time
+        # cut -- avoids marking as consumed a row that had not yet been read
+        # (the same class of bug as the cursor above).
         cur.execute(
             """
             UPDATE CONFIG.PENDING_RUNS
@@ -246,9 +248,9 @@ def bronze_new_data_sensor(context, snowflake: SnowflakeResource) -> SensorResul
     )
 
 
-# ── Registry: mesmo gate, aplicado antes de tocar Snowflake ──────────────
-# (_get_kafka_message_totals vive agora no bloco compartilhado lá em cima,
-#  porque os dois sensores usam o mesmo gate.)
+# ── Registry: same gate, applied before touching Snowflake ───────────────
+# (_get_kafka_message_totals now lives in the shared block above, because both
+#  sensors use the same gate.)
 
 def _get_registered_subjects() -> list:
     resp = requests.get(
@@ -271,33 +273,33 @@ def _get_synced_tables(conn) -> set:
     default_status=DefaultSensorStatus.RUNNING,
 )
 def registry_new_subject_sensor(context, snowflake: SnowflakeResource) -> SensorResult:
-    # Cursor migrado em 2026-08-10 do formato antigo (dict cru de totais) para
-    # {"totals": ..., "initialized": ...}. Cursor no formato velho cai em
-    # `initialized=False` e checa uma vez — self-healing, sem passo manual.
+    # Cursor migrated on 2026-08-10 from the old format (raw dict of totals) to
+    # {"totals": ..., "initialized": ...}. A cursor in the old format falls into
+    # `initialized=False` and checks once -- self-healing, no manual step.
     state = json.loads(context.cursor or "{}")
     last_totals = state.get("totals", {})
     initialized = state.get("initialized", False)
 
-    # Fase 1 — custo zero: houve atividade em algum tópico CDC desde o último
-    # ciclo? Mesmo gate do bronze_new_data_sensor, mesma função.
+    # Phase 1 -- zero cost: was there activity on any CDC topic since the last
+    # cycle? Same gate as bronze_new_data_sensor, same function.
     has_activity, current_totals = _kafka_had_activity(context, last_totals, initialized)
     new_cursor = json.dumps({"totals": current_totals, "initialized": True})
 
     if not has_activity:
         return SensorResult(
-            skip_reason=SkipReason("Sem atividade no Kafka (via Prometheus)."),
+            skip_reason=SkipReason("No Kafka activity (via Prometheus)."),
             cursor=new_cursor,
         )
 
-    # Fase 2 — só agora toca o Snowflake.
+    # Phase 2 -- only now does it touch Snowflake.
     try:
         subjects = _get_registered_subjects()
     except Exception as e:
-        return SensorResult(skip_reason=SkipReason(f"Schema Registry indisponível: {e}"))
+        return SensorResult(skip_reason=SkipReason(f"Schema Registry unavailable: {e}"))
 
     if not subjects:
         return SensorResult(
-            skip_reason=SkipReason("Nenhum subject registrado."),
+            skip_reason=SkipReason("No subjects registered."),
             cursor=new_cursor,
         )
 
@@ -310,7 +312,7 @@ def registry_new_subject_sensor(context, snowflake: SnowflakeResource) -> Sensor
 
     if not new_tables:
         return SensorResult(
-            skip_reason=SkipReason("Todos os subjects já sincronizados em TABLE_METADATA."),
+            skip_reason=SkipReason("All subjects already synced into TABLE_METADATA."),
             cursor=new_cursor,
         )
 

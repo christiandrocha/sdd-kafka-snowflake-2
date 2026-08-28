@@ -1,13 +1,13 @@
 """
-jobs.py — os dois jobs que os sensores de sensors.py disparam.
+jobs.py -- the two jobs that the sensors in sensors.py trigger.
 
-  cdc_pipeline_job   ← bronze_new_data_sensor      (dado novo em Bronze)
-  sync_metadata_job  ← registry_new_subject_sensor (subject novo no Registry)
+  cdc_pipeline_job   <- bronze_new_data_sensor      (new data in Bronze)
+  sync_metadata_job  <- registry_new_subject_sensor (new subject in Registry)
 
-Portado do projeto anterior com uma correção de caminho: lá o script era
-referenciado como "/opt/dagster/app/../scripts/sync_metadata.py", que resolve
-para /opt/dagster/scripts/sync_metadata.py por caminho relativo acidental.
-Aqui é escrito direto, que é o ponto onde o docker-compose monta ./scripts
+Ported from the previous project with one path fix: there the script was
+referenced as "/opt/dagster/app/../scripts/sync_metadata.py", which resolves to
+/opt/dagster/scripts/sync_metadata.py by accidental relative path. Here it is
+written directly, which is where docker-compose mounts ./scripts
 (volumes: ./scripts:/opt/dagster/scripts).
 """
 
@@ -19,7 +19,7 @@ from dagster import AssetSelection, define_asset_job, job, op
 SYNC_METADATA_SCRIPT = "/opt/dagster/scripts/sync_metadata.py"
 
 
-# ── Job 1: pipeline dbt (Bronze → Silver → Gold) ─────────────────────────────
+# ── Job 1: dbt pipeline (Bronze -> Silver -> Gold) ───────────────────────────
 
 cdc_pipeline_job = define_asset_job(
     name="cdc_pipeline_job",
@@ -28,7 +28,7 @@ cdc_pipeline_job = define_asset_job(
 )
 
 
-# ── Job 2: sync_metadata (Schema Registry → CONFIG.TABLE_METADATA) ───────────
+# ── Job 2: sync_metadata (Schema Registry -> CONFIG.TABLE_METADATA) ──────────
 
 @op(description="Roda sync_metadata.py para sincronizar Schema Registry → TABLE_METADATA")
 def run_sync_metadata(context):

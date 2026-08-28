@@ -8,17 +8,17 @@
     )
 }}
 
--- Bronze: itens de linha do pedido. Maior volume do projeto.
--- No v2.1.2 tinha conector proprio por causa do buffer client-side; no v4
--- esse buffer nao existe mais (buffer.count.records ausente do JAR) e o
--- dominio voltou para o conector unico.
--- Merge por order_item_id -- idempotente sobre reentrega do Snowpipe Streaming.
+-- Bronze: order line items. Largest volume in the project.
+-- Under v2.1.2 it had its own connector because of the client-side buffer; in
+-- v4 that buffer no longer exists (buffer.count.records absent from the JAR)
+-- and the domain went back to the single connector.
+-- Merge on order_item_id -- idempotent over Snowpipe Streaming redelivery.
 --
--- v4: as colunas chegam TIPADAS e em MAIUSCULO (schematizacao do
--- SnowflakeStreamingSinkConnector), entao nao ha mais extracao
--- RECORD_CONTENT:campo::TIPO. O RECORD_METADATA continua sendo escrito pelo
--- conector (chaves snowflake.metadata.* seguem no JAR 4.1.0) e continua
--- servindo de watermark incremental e de desempate na deduplicacao.
+-- v4: columns arrive TYPED and UPPERCASE (schematization by the
+-- SnowflakeStreamingSinkConnector), so there is no more
+-- RECORD_CONTENT:field::TYPE extraction. RECORD_METADATA is still written by
+-- the connector (the snowflake.metadata.* keys remain in JAR 4.1.0) and still
+-- serves as the incremental watermark and the deduplication tie-break.
 
 WITH source AS (
     SELECT
@@ -46,11 +46,11 @@ WITH source AS (
 
     FROM {{ source('bronze_raw', 'ORDER_ITEMS') }}
 
-    -- Descarta o tombstone do Kafka: `drop.tombstones=false` no Debezium faz
-    -- todo DELETE emitir, depois da linha `__OP='d'`, uma mensagem de valor
-    -- nulo que o sink materializa como linha inteiramente nula. Sem este
-    -- filtro ela entra aqui, e como o MERGE por ORDER_ITEM_ID nunca casa com
-    -- chave nula, cada DELETE deixa uma linha-lixo permanente na Bronze.
+    -- Discards the Kafka tombstone: `drop.tombstones=false` in Debezium makes
+    -- every DELETE emit, right after the `__OP='d'` row, a null-valued message
+    -- that the sink materializes as an entirely null row. Without this filter
+    -- it lands here, and since the MERGE on ORDER_ITEM_ID never matches a null key,
+    -- every DELETE leaves a permanent junk row in Bronze.
     WHERE ORDER_ITEM_ID IS NOT NULL
 
     {% if is_incremental() %}

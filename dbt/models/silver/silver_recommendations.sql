@@ -5,16 +5,16 @@
     )
 }}
 
--- Silver: eventos de recomendacao de ML, um por event_id.
--- Tipos observados nos dados em 2026-08-10: recommendation_served,
+-- Silver: ML recommendation events, one per event_id.
+-- Types observed in the data on 2026-08-10: recommendation_served,
 -- add_to_cart, click, view.
 --
--- Era table_type='log' com cdc_strategy='upsert' ate 2026-08-10; a etiqueta
--- foi corrigida para 'fact' pelo mesmo motivo descrito em
--- silver_search_events.sql -- 255 linhas para 255 chaves distintas e zero
--- deletes na origem, append-only. A estrategia 'upsert' nao mudou.
+-- It was table_type='log' with cdc_strategy='upsert' until 2026-08-10; the
+-- label was corrected to 'fact' for the same reason described in
+-- silver_search_events.sql -- 255 rows for 255 distinct keys and zero deletes
+-- at the source, append-only. The 'upsert' strategy did not change.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_recommendations')) }}

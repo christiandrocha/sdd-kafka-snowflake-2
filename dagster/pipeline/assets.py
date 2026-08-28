@@ -15,15 +15,15 @@ MANIFEST_PATH = DBT_PROJECT_DIR / "target" / "manifest.json"
 
 def _manifest_has_models(path: Path) -> bool:
     """
-    O decorator @dbt_assets resolve o seletor 'fqn:*' em tempo de import e
-    levanta EventCompilationError ("The selection criterion 'fqn:*' does not
-    match any nodes") se o manifest nao tiver nenhum model -- o que derruba o
-    code location inteiro, nao so o asset do dbt.
+    The @dbt_assets decorator resolves the 'fqn:*' selector at import time and
+    raises EventCompilationError ("The selection criterion 'fqn:*' does not
+    match any nodes") if the manifest has no models -- which brings down the
+    entire code location, not just the dbt asset.
 
-    Enquanto o projeto dbt e so esqueleto (os 10 models Bronze chegam no build
-    do MIGRACAO_INGESTAO_V4), esta checagem mantem o code location carregavel:
-    sensores e jobs sobem normalmente e os assets do dbt aparecem sozinhos
-    assim que o primeiro model existir. Nao ha o que configurar depois.
+    While the dbt project is only a skeleton (the 10 Bronze models arrive with
+    the MIGRACAO_INGESTAO_V4 build), this check keeps the code location
+    loadable: sensors and jobs come up normally and the dbt assets appear on
+    their own as soon as the first model exists. Nothing to configure later.
     """
     try:
         with open(path) as f:
@@ -33,9 +33,9 @@ def _manifest_has_models(path: Path) -> bool:
     return any(k.startswith("model.") for k in manifest.get("nodes", {}))
 
 
-# ── dbt assets (Bronze → Silver → Gold) ───────────────────────────────────────
+# ── dbt assets (Bronze -> Silver -> Gold) ─────────────────────────────────────
 
-# Lista vazia enquanto nao ha model; vira [cdc_dbt_assets] quando houver.
+# Empty list while there are no models; becomes [cdc_dbt_assets] once there are.
 CDC_DBT_ASSETS: list = []
 
 if _manifest_has_models(MANIFEST_PATH):

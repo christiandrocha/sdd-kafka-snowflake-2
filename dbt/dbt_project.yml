@@ -9,35 +9,35 @@ macro-paths:  ["macros"]
 target-path:  "target"
 clean-targets: ["target", "dbt_packages"]
 
-# CADA BLOCO DECLARA O QUE A CAMADA REALMENTE USA.
+# EACH BLOCK DECLARES WHAT THE LAYER ACTUALLY USES.
 #
-# Até 2026-08-10 os três blocos declaravam `incremental` + `merge`, herdado de
-# quando as pastas estavam vazias. Nenhum model de silver ou gold usava isso:
-# os 10 da Silver e 4 dos 6 da Gold são `table`. O default não era só letra
-# morta — era armadilha. Model novo largado em models/silver/ herdaria
-# `incremental` com `merge` e SEM `unique_key`, e nessa combinação o dbt
-# degrada para append puro: cada execução reinsere tudo, em silêncio.
+# Until 2026-08-10 all three blocks declared `incremental` + `merge`, inherited
+# from when the folders were empty. No silver or gold model used that: the 10
+# in Silver and 4 of the 6 in Gold are `table`. The default was not merely dead
+# letter -- it was a trap. A new model dropped into models/silver/ would inherit
+# `incremental` with `merge` and NO `unique_key`, and in that combination dbt
+# degrades to a plain append: every run reinserts everything, silently.
 #
-# Por que cada camada é o que é:
+# Why each layer is what it is:
 #
-#   bronze -> incremental/merge. Append CDC bruto, com watermark por
-#             kafka_created_at e MERGE por chave de negócio para ser
-#             idempotente sobre reentrega do Snowpipe Streaming.
+#   bronze -> incremental/merge. Raw CDC append, with a watermark on
+#             kafka_created_at and a MERGE on the business key, so it is
+#             idempotent over Snowpipe Streaming redelivery.
 #
-#   silver -> table. MERGE não apaga linha. Num incremental, chave deletada na
-#             origem sobreviveria para sempre, porque a linha `op='d'` é
-#             filtrada pelo resolve_cdc e nunca chega ao merge. Ver o
-#             cabeçalho de silver_orders.sql.
+#   silver -> table. MERGE does not delete rows. In an incremental model a key
+#             deleted at the source would survive in Silver forever, because
+#             the `op='d'` row is filtered by resolve_cdc and never reaches the
+#             merge. See the header of silver_orders.sql.
 #
-#   gold   -> table como default seguro (rebuild sempre está correto, no
-#             máximo é lento). Os dois models que são de fato aditivos por
-#             chave — gold_payment_lifecycle e gold_payments_by_status —
-#             declaram `incremental` no próprio arquivo, junto com o
-#             `unique_key` e o `on_schema_change` de que dependem.
+#   gold   -> table as the safe default (a rebuild is always correct, at worst
+#             slow). The two models that are genuinely additive per key --
+#             gold_payment_lifecycle and gold_payments_by_status -- declare
+#             `incremental` in their own file, along with the `unique_key` and
+#             the `on_schema_change` they depend on.
 #
-# `incremental_strategy` e `on_schema_change` saíram dos blocos de silver e
-# gold: o dbt só os consulta em materialização incremental, então aqui eram
-# inertes e sugeriam um comportamento que a camada não tem.
+# `incremental_strategy` and `on_schema_change` were removed from the silver and
+# gold blocks: dbt only consults them for an incremental materialization, so
+# here they were inert and suggested a behaviour the layer does not have.
 models:
   sdd_kafka_snowflake:
     bronze:

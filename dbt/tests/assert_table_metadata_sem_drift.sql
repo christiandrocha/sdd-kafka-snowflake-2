@@ -1,28 +1,29 @@
--- CONFIG.TABLE_METADATA nao divergiu do que este commit espera.
+-- CONFIG.TABLE_METADATA has not drifted from what this commit expects.
 --
--- POR QUE ESTE TESTE EXISTE
+-- WHY THIS TEST EXISTS
 --
--- O macro `get_config_for` le CONFIG.TABLE_METADATA em tempo de COMPILACAO e
--- dela sai a `cdc_strategy` de cada modelo Silver -- upsert, append ou log.
--- Isso significa que o mesmo commit compila SQL diferente conforme o estado
--- de uma tabela no Snowflake. Alguem editar uma linha ali muda a semantica de
--- um modelo sem produzir um unico diff no Git, e um `log` virando `upsert`
--- colapsa historico em silencio.
+-- The `get_config_for` macro reads CONFIG.TABLE_METADATA at COMPILE time, and
+-- from it comes the `cdc_strategy` of every Silver model -- upsert, append or
+-- log. That means the same commit compiles different SQL depending on the
+-- state of a table in Snowflake. Someone editing a row there changes a model's
+-- semantics without producing a single diff in Git, and a `log` turning into
+-- an `upsert` collapses history silently.
 --
--- A tabela continua sendo a fonte em runtime -- esse desenho e deliberado e
--- tem valor, porque permite reagir a um dominio novo sem deploy. O que faltava
--- era a contraparte: uma copia versionada do que se espera encontrar la, para
--- que divergencia vire falha de build em vez de surpresa.
+-- The table remains the source of truth at runtime -- that design is
+-- deliberate and has value, because it allows reacting to a new domain without
+-- a deploy. What was missing was the counterpart: a versioned copy of what we
+-- expect to find there, so that divergence becomes a build failure instead of
+-- a surprise.
 --
--- QUANDO ESTE TESTE FALHAR, decida qual lado esta certo:
---   - mudanca intencional na tabela -> atualize a lista abaixo no mesmo commit
---     que documenta o porque;
---   - mudanca nao intencional       -> corrija a tabela.
--- O que nao vale e silenciar o teste.
+-- WHEN THIS TEST FAILS, decide which side is right:
+--   - intentional change to the table -> update the list below in the same
+--     commit that documents why;
+--   - unintentional change            -> fix the table.
+-- What is not acceptable is silencing the test.
 --
--- ESCOPO: so as colunas que mudam comportamento. `notes`, `registered_at`,
--- `changed_by` e afins ficam de fora de proposito -- sao metadados de
--- auditoria e travar neles produziria falha por edicao inofensiva.
+-- SCOPE: only the columns that change behaviour. `notes`, `registered_at`,
+-- `changed_by` and the like are deliberately left out -- they are audit
+-- metadata and locking on them would produce failures over harmless edits.
 
 {% set esperado = [
     ('driver_shifts',   'entity', 'upsert', 'shift_id'),
@@ -67,9 +68,9 @@ SELECT
     e.cdc_strategy AS estrategia_esperada, a.cdc_strategy AS estrategia_atual,
     e.unique_key   AS chave_esperada,  a.unique_key   AS chave_atual,
     CASE
-        WHEN a.table_name IS NULL THEN 'ausente na CONFIG.TABLE_METADATA'
-        WHEN e.table_name IS NULL THEN 'presente na tabela e nao esperado por este commit'
-        ELSE                           'configuracao divergente'
+        WHEN a.table_name IS NULL THEN 'missing from CONFIG.TABLE_METADATA'
+        WHEN e.table_name IS NULL THEN 'present in the table and not expected by this commit'
+        ELSE                           'divergent configuration'
     END AS motivo
 
 FROM esperado e

@@ -5,11 +5,11 @@
     )
 }}
 
--- Silver: restaurantes, um por uuid.
--- CNPJ (nao o uuid) e o restaurant_key usado por orders -- o uuid e a chave
--- tecnica do CDC, a juncao de negocio e por cnpj.
+-- Silver: restaurants, one per uuid.
+-- CNPJ (not the uuid) is the restaurant_key used by orders -- the uuid is the
+-- CDC technical key, the business join is on cnpj.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_restaurants')) }}

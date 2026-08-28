@@ -5,15 +5,15 @@
     )
 }}
 
--- Silver: estado atual de cada turno do entregador, um por shift_id
--- (ganhos, distancia, numero de pedidos, avaliacao).
+-- Silver: current state of each driver shift, one per shift_id
+-- (earnings, distance, order count, rating).
 --
--- Turno em andamento e atualizado varias vezes na origem ate fechar --
--- exatamente o caso em que a deduplicacao por source_ts_ms + kafka_offset
--- importa: sem o desempate por offset, dois UPDATEs no mesmo milissegundo
--- deixariam a escolha da versao final nao deterministica.
+-- A shift in progress is updated several times at the source before it closes
+-- -- exactly the case where deduplication by source_ts_ms + kafka_offset
+-- matters: without the offset tie-break, two UPDATEs in the same millisecond
+-- would leave the choice of final version non-deterministic.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_driver_shifts')) }}

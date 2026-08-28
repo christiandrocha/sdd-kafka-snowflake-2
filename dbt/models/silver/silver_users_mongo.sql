@@ -5,12 +5,12 @@
     )
 }}
 
--- Silver: usuarios (origem MongoDB), um por uuid.
--- CPF (nao o uuid) e o user_key usado por orders, e e tambem o que liga este
--- modelo ao silver_users_mssql -- os dois sistemas de origem tem uuids
--- proprios e independentes para a mesma pessoa.
+-- Silver: users (MongoDB origin), one per uuid.
+-- CPF (not the uuid) is the user_key used by orders, and it is also what links
+-- this model to silver_users_mssql -- the two source systems have their own
+-- independent uuids for the same person.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_users_mongo')) }}

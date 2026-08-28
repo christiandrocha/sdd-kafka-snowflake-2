@@ -1,26 +1,26 @@
--- A Bronze absorveu tudo que o sink entregou?
+-- Did Bronze absorb everything the sink delivered?
 --
--- POR QUE NAO E UM TESTE DE FRESCOR
+-- WHY THIS IS NOT A FRESHNESS TEST
 --
--- `dbt/models/config/sources.yml` ja declara freshness (warn 5min, error
--- 15min) e NADA neste projeto executa `dbt source freshness` -- configuracao
--- orfa desde que foi escrita. A tentacao seria ligar aquilo. Nao liguei, por
--- um motivo concreto: um teste de relogio nao distingue "a stack esta
--- desligada de proposito" de "a ingestao quebrou". Neste projeto a stack fica
--- parada a maior parte do tempo, entao um teste desses passaria a vida
--- vermelho, e alarme que vive vermelho ninguem le -- que e justamente o
--- problema que ele deveria resolver.
+-- `dbt/models/config/sources.yml` already declares freshness (warn 5min, error
+-- 15min) and NOTHING in this project runs `dbt source freshness` -- orphan
+-- configuration since the day it was written. The temptation would be to wire
+-- it up. I did not, for a concrete reason: a clock test cannot tell "the stack
+-- is deliberately switched off" from "ingestion broke". In this project the
+-- stack sits idle most of the time, so such a test would live permanently red,
+-- and an alarm that lives red is one nobody reads -- which is precisely the
+-- problem it was supposed to solve.
 --
--- Este teste faz a pergunta que TEM resposta objetiva com a stack parada:
--- toda linha que chegou na tabela de landing existe no modelo Bronze? Ele
--- pega o modo de falha real -- sink entregou e o dbt nao processou, ou o
--- watermark incremental (`MAX(kafka_created_at)`) travou -- sem depender de
--- haver trafego agora.
+-- This test asks the question that HAS an objective answer with the stack
+-- stopped: does every row that reached the landing table exist in the Bronze
+-- model? It catches the real failure mode -- the sink delivered and dbt did
+-- not process, or the incremental watermark (`MAX(kafka_created_at)`) got
+-- stuck -- without depending on there being traffic right now.
 --
--- COMPARACAO: chaves DISTINTAS nao nulas no landing contra linhas no modelo.
--- Distintas porque o Snowpipe Streaming pode reentregar; nao nulas porque a
--- linha de tombstone do Kafka chega com tudo nulo e o modelo a descarta de
--- proposito (ver o cabecalho de models/bronze/schema.yml).
+-- COMPARISON: DISTINCT non-null keys in the landing table against rows in the
+-- model. Distinct because Snowpipe Streaming can redeliver; non-null because
+-- the Kafka tombstone row arrives with everything null and the model discards
+-- it on purpose (see the header of models/bronze/schema.yml).
 
 {% set dominios = [
     ('PAYMENT_EVENTS',  'bronze_payment_events',  'EVENT_ID'),

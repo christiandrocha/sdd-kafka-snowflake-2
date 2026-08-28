@@ -5,14 +5,14 @@
     )
 }}
 
--- Silver: estado atual de cada item de linha, uma linha por order_item_id.
--- Maior volume do projeto -- e o candidato numero 1 a sair de 'table' se o
--- custo do rebuild passar a doer.
+-- Silver: current state of each line item, one row per order_item_id.
+-- Largest volume in the project -- and the number one candidate to leave
+-- 'table' if the rebuild cost starts to hurt.
 --
--- Estrategia 'upsert' (fact) vinda de CONFIG.TABLE_METADATA; toda a logica
--- esta em dbt/macros/resolve_cdc.sql. O 'table' em vez do default
--- 'incremental' de silver segue o motivo detalhado em silver_orders.sql:
--- MERGE nao apaga linha, entao chave deletada na origem sobreviveria para
--- sempre num incremental.
+-- Strategy 'upsert' (fact) comes from CONFIG.TABLE_METADATA; all the logic is
+-- in dbt/macros/resolve_cdc.sql. The 'table' instead of silver's 'incremental'
+-- default follows the reason detailed in silver_orders.sql: MERGE does not
+-- delete rows, so a key deleted at the source would survive forever in an
+-- incremental.
 
 {{ resolve_cdc(ref('bronze_order_items')) }}

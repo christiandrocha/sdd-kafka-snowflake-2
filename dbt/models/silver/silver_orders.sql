@@ -5,33 +5,33 @@
     )
 }}
 
--- Silver: estado atual de cada pedido, uma linha por order_id.
+-- Silver: current state of each order, one row per order_id.
 --
--- Toda a logica de colapso do historico CDC esta em resolve_cdc(); este
--- arquivo so aponta a fonte. A estrategia ('upsert' para orders) vem de
--- CONFIG.TABLE_METADATA, com fallback estatico em get_table_config() para
--- quando nao ha conexao -- ver dbt/macros/resolve_cdc.sql.
+-- All the logic that collapses the CDC history lives in resolve_cdc(); this
+-- file only points at the source. The strategy ('upsert' for orders) comes
+-- from CONFIG.TABLE_METADATA, with a static fallback in get_table_config()
+-- for when there is no connection -- see dbt/macros/resolve_cdc.sql.
 --
--- POR QUE 'table' E NAO 'incremental' (o default de silver no
--- dbt_project.yml): as duas coisas que resolve_cdc faz na estrategia upsert
--- so valem sobre o historico INTEIRO da entidade.
+-- WHY 'table' AND NOT 'incremental' (silver's default in dbt_project.yml):
+-- the two things resolve_cdc does under the upsert strategy only hold over
+-- the entity's ENTIRE history.
 --
---   1. O ROW_NUMBER particiona por order_id sobre tudo que existe na Bronze.
---      Um incremental filtrado por watermark rankearia so o lote novo -- o
---      que ainda daria a versao certa via MERGE, mas deixa de ser a mesma
---      operacao descrita na macro.
---   2. DELETE. A linha `op='d'` e descartada pelo filtro, entao ela nunca
---      chega ao MERGE, e MERGE nao apaga nada: num incremental, uma chave
---      apagada na origem ficaria na Silver para sempre. Com rebuild, ela
---      simplesmente deixa de aparecer no proximo run.
+--   1. The ROW_NUMBER partitions by order_id across everything in Bronze. An
+--      incremental filtered by a watermark would rank only the new batch --
+--      which would still give the right version via MERGE, but it stops being
+--      the same operation the macro describes.
+--   2. DELETE. The `op='d'` row is dropped by the filter, so it never reaches
+--      the MERGE, and MERGE deletes nothing: in an incremental, a key deleted
+--      at the source would stay in Silver forever. With a rebuild it simply
+--      stops appearing on the next run.
 --
--- O custo e varrer bronze_orders inteira a cada execucao. No volume atual da
--- POC isso e barato; se a Bronze crescer a ponto de doer, a saida NAO e
--- trocar para incremental merge -- e incremental com delete+insert por
--- particao de data, que preserva a semantica do item 2.
+-- The cost is scanning all of bronze_orders on every run. At the POC's current
+-- volume that is cheap; if Bronze grows enough to hurt, the answer is NOT to
+-- switch to incremental merge -- it is incremental with delete+insert by date
+-- partition, which preserves the semantics of point 2.
 --
--- As colunas de controle CDC (op, source_ts_ms, kafka_offset,
--- kafka_partition, kafka_created_at) seguem para a Silver de proposito: sao
--- a linhagem que liga cada linha ao evento Kafka que a produziu.
+-- The CDC control columns (op, source_ts_ms, kafka_offset, kafka_partition,
+-- kafka_created_at) travel on to Silver on purpose: they are the lineage
+-- tying each row to the Kafka event that produced it.
 
 {{ resolve_cdc(ref('bronze_orders')) }}

@@ -8,17 +8,18 @@
     )
 }}
 
--- Bronze: eventos do ciclo de vida do pagamento.
--- Merge por event_id -- idempotente sobre reentrega do Snowpipe Streaming.
--- Ciclo real: created -> authorized -> captured -> succeeded -> settled -> closed
+-- Bronze: payment lifecycle events.
+-- Merge on event_id -- idempotent over Snowpipe Streaming redelivery.
+-- Real cycle: created -> authorized -> captured -> succeeded -> settled -> closed
 --                                              -> refunded -> closed
 --
--- v4: as colunas escalares chegam tipadas. O campo `event` NAO -- ele e JSONB
--- no Postgres e o Debezium o serializa como string (io.debezium.data.Json),
--- entao a schematizacao cria VARCHAR e o PARSE_JSON continua necessario.
+-- v4: the scalar columns arrive typed. The `event` field does NOT -- it is
+-- JSONB in Postgres and Debezium serializes it as a string
+-- (io.debezium.data.Json), so schematization creates VARCHAR and PARSE_JSON
+-- is still required.
 --
--- O timestamp interno do evento chega como int OU float em notacao
--- cientifica, ambos epoch ms. O CAST via FLOAT cobre as duas formas.
+-- The event's internal timestamp arrives as an int OR a float in scientific
+-- notation, both epoch ms. The CAST through FLOAT covers both forms.
 
 WITH source AS (
     SELECT
@@ -44,11 +45,11 @@ WITH source AS (
 
     FROM {{ source('bronze_raw', 'PAYMENT_EVENTS') }}
 
-    -- Descarta o tombstone do Kafka: `drop.tombstones=false` no Debezium faz
-    -- todo DELETE emitir, depois da linha `__OP='d'`, uma mensagem de valor
-    -- nulo que o sink materializa como linha inteiramente nula. Sem este
-    -- filtro ela entra aqui, e como o MERGE por EVENT_ID nunca casa com
-    -- chave nula, cada DELETE deixa uma linha-lixo permanente na Bronze.
+    -- Discards the Kafka tombstone: `drop.tombstones=false` in Debezium makes
+    -- every DELETE emit, right after the `__OP='d'` row, a null-valued message
+    -- that the sink materializes as an entirely null row. Without this filter
+    -- it lands here, and since the MERGE on EVENT_ID never matches a null key,
+    -- every DELETE leaves a permanent junk row in Bronze.
     WHERE EVENT_ID IS NOT NULL
 
     {% if is_incremental() %}

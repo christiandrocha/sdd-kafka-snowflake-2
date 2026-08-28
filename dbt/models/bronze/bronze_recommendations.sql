@@ -8,19 +8,20 @@
     )
 }}
 
--- Bronze: eventos de recomendacao de ML. Tipos observados nos dados em
--- 2026-08-10: recommendation_served, add_to_cart, click, view. (Ate essa
--- data este comentario dizia "view, click, purchase, dismiss" -- palpite que
--- nunca bateu com a origem e que contaminou o teste da Silver.)
--- A coluna de origem chama-se TIMESTAMP; aqui vem entre aspas e sai como
--- event_timestamp, para nao colidir com o tipo TIMESTAMP no SQL gerado.
--- Merge por event_id -- idempotente sobre reentrega do Snowpipe Streaming.
+-- Bronze: ML recommendation events. Types observed in the data on
+-- 2026-08-10: recommendation_served, add_to_cart, click, view. (Until that
+-- date this comment said "view, click, purchase, dismiss" -- a guess that
+-- never matched the source and that contaminated the Silver test.)
+-- The source column is named TIMESTAMP; here it is quoted and comes out as
+-- event_timestamp, so it does not collide with the TIMESTAMP type in the
+-- generated SQL.
+-- Merge on event_id -- idempotent over Snowpipe Streaming redelivery.
 --
--- v4: as colunas chegam TIPADAS e em MAIUSCULO (schematizacao do
--- SnowflakeStreamingSinkConnector), entao nao ha mais extracao
--- RECORD_CONTENT:campo::TIPO. O RECORD_METADATA continua sendo escrito pelo
--- conector (chaves snowflake.metadata.* seguem no JAR 4.1.0) e continua
--- servindo de watermark incremental e de desempate na deduplicacao.
+-- v4: columns arrive TYPED and UPPERCASE (schematization by the
+-- SnowflakeStreamingSinkConnector), so there is no more
+-- RECORD_CONTENT:field::TYPE extraction. RECORD_METADATA is still written by
+-- the connector (the snowflake.metadata.* keys remain in JAR 4.1.0) and still
+-- serves as the incremental watermark and the deduplication tie-break.
 
 WITH source AS (
     SELECT
@@ -39,11 +40,11 @@ WITH source AS (
 
     FROM {{ source('bronze_raw', 'RECOMMENDATIONS') }}
 
-    -- Descarta o tombstone do Kafka: `drop.tombstones=false` no Debezium faz
-    -- todo DELETE emitir, depois da linha `__OP='d'`, uma mensagem de valor
-    -- nulo que o sink materializa como linha inteiramente nula. Sem este
-    -- filtro ela entra aqui, e como o MERGE por EVENT_ID nunca casa com
-    -- chave nula, cada DELETE deixa uma linha-lixo permanente na Bronze.
+    -- Discards the Kafka tombstone: `drop.tombstones=false` in Debezium makes
+    -- every DELETE emit, right after the `__OP='d'` row, a null-valued message
+    -- that the sink materializes as an entirely null row. Without this filter
+    -- it lands here, and since the MERGE on EVENT_ID never matches a null key,
+    -- every DELETE leaves a permanent junk row in Bronze.
     WHERE EVENT_ID IS NOT NULL
 
     {% if is_incremental() %}

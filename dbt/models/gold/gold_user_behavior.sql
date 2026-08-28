@@ -5,43 +5,45 @@
     )
 }}
 
--- Gold: comportamento acumulado por usuario -- pedidos, gasto, buscas e
--- interacoes com recomendacao, mais o perfil vindo das duas origens de
--- cadastro (MongoDB e MSSQL).
+-- Gold: cumulative behaviour per user -- orders, spend, searches and
+-- recommendation interactions, plus the profile coming from the two
+-- registration sources (MongoDB and MSSQL).
 --
--- Categoria: aditivo-particionavel por usuario, CUMULATIVO -- nao e janela
--- deslizante. Nao ha recorte de tempo: "primeiro pedido" e "ultimo pedido"
--- delimitam a vida inteira do usuario na base.
+-- Category: additive-partitionable per user, CUMULATIVE -- not a sliding
+-- window. There is no time slice: "first order" and "last order" bound the
+-- user's entire life in the database.
 --
--- A CHAVE E O CPF, E ISSO EXIGE CUIDADO. O modelo precisa costurar tres
--- espacos de identificador diferentes:
+-- THE KEY IS THE CPF, AND THAT NEEDS CARE. The model has to stitch three
+-- different identifier spaces together:
 --
 --     orders.user_key ......... CPF (texto)
 --     users_mongo.cpf ......... CPF (texto)  + users_mongo.user_id (inteiro)
 --     search_events.user_id ... inteiro
 --     recommendations.user_id . inteiro
 --
--- `users_mongo` e a unica ponte entre o CPF e o user_id numerico. Por isso
--- ele aparece duas vezes abaixo, com papeis distintos:
+-- `users_mongo` is the only bridge between the CPF and the numeric user_id.
+-- That is why it appears twice below, in distinct roles:
 --
---   `ponte`  -- TODOS os pares (cpf, user_id). Usado para somar buscas e
---              recomendacoes. Nao pode ser deduplicado: 95 CPFs aparecem com
---              mais de um cadastro nesta base (412 usuarios para 216 CPFs
---              distintos, verificado em 2026-08-10), e cada cadastro tem seu
---              user_id. Deduplicar aqui perderia os eventos dos user_id
---              descartados.
+--   `ponte`  -- ALL (cpf, user_id) pairs. Used to sum searches and
+--              recommendations. It cannot be deduplicated: 95 CPFs appear with
+--              more than one registration in this database (412 users for 216
+--              distinct CPFs, verified 2026-08-10), and each registration has
+--              its own user_id. Deduplicating here would lose the events of
+--              the discarded user_ids.
 --
---   `perfil` -- UMA linha por CPF, escolhida deterministicamente pelo mesmo
---              criterio do resolve_cdc (source_ts_ms, depois kafka_offset).
---              Usado so para atributos descritivos. Sem esse QUALIFY, a
---              juncao com pedidos multiplicaria cada pedido pelo numero de
---              cadastros do CPF -- e o gasto total sairia inflado ate 2x.
+--   `perfil` -- ONE row per CPF, chosen deterministically by the same
+--              criterion as resolve_cdc (source_ts_ms, then kafka_offset).
+--              Used only for descriptive attributes. Without that QUALIFY, the
+--              join with orders would multiply each order by the number of
+--              registrations for the CPF -- and total spend would come out
+--              inflated by up to 2x.
 --
--- O mesmo vale para users_mssql, que traz o perfil estendido pelo mesmo CPF.
+-- The same holds for users_mssql, which brings the extended profile on the
+-- same CPF.
 --
--- Usuario sem pedido nenhum continua na tabela (o FROM parte do perfil, e as
--- juncoes de fato sao LEFT): quem so busca e nunca compra e exatamente o
--- segmento que este modelo deveria conseguir mostrar.
+-- A user with no orders at all stays in the table (the FROM starts from the
+-- profile, and the fact joins are LEFT): someone who only searches and never
+-- buys is exactly the segment this model should be able to show.
 
 WITH ponte AS (
 

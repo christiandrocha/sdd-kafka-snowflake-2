@@ -5,11 +5,10 @@
     )
 }}
 
--- Silver: perfil estendido do usuario (origem MSSQL), um por uuid.
--- Junta com silver_users_mongo por CPF, nao por uuid -- ver o comentario
--- daquele modelo.
+-- Silver: extended user profile (MSSQL origin), one per uuid.
+-- Joins silver_users_mongo on CPF, not on uuid -- see that model's comment.
 --
--- 'table' em vez do default 'incremental' de silver: motivo em
+-- 'table' instead of silver's 'incremental' default: reason in
 -- silver_orders.sql.
 
 {{ resolve_cdc(ref('bronze_users_mssql')) }}

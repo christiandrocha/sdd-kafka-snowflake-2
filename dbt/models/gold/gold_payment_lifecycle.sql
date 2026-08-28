@@ -8,66 +8,66 @@
     )
 }}
 
--- Gold: uma linha por pagamento, com o instante de cada etapa do ciclo
--- pivotado em coluna. E o modelo de referencia de agregacao ADITIVA-
--- PARTICIONAVEL do projeto: o estado de um pagamento so depende dos eventos
--- daquele payment_id, entao evento novo obriga a recalcular UM pagamento, nao
--- a tabela inteira.
+-- Gold: one row per payment, with the instant of each lifecycle stage pivoted
+-- into a column. This is the project's reference model for ADDITIVE-
+-- PARTITIONABLE aggregation: a payment's state depends only on the events of
+-- that payment_id, so a new event forces recomputing ONE payment, not the
+-- whole table.
 --
--- COMO O INCREMENTAL FUNCIONA AQUI. O CTE `alvo` descobre QUAIS pagamentos
--- mudaram; ele nao filtra as linhas que entram na agregacao. Depois de
--- identificar os payment_id afetados, o CTE `eventos` traz o historico
--- COMPLETO de cada um -- caso contrario um evento `closed` que chegasse
--- sozinho produziria uma linha sem `criado_em`, e o MERGE sobrescreveria a
--- versao boa por uma versao mutilada. Verificado ao vivo em 2026-08-11:
--- `criado_em` e `autorizado_em` sobreviveram a chegada isolada de um `closed`.
+-- HOW THE INCREMENTAL WORKS HERE. The `alvo` CTE finds WHICH payments changed;
+-- it does not filter the rows that feed the aggregation. Once the affected
+-- payment_ids are known, the `eventos` CTE brings the COMPLETE history of each
+-- one -- otherwise a `closed` event arriving alone would produce a row with no
+-- `criado_em`, and the MERGE would overwrite the good version with a mutilated
+-- one. Verified live on 2026-08-11: `criado_em` and `autorizado_em` survived
+-- the isolated arrival of a `closed`.
 --
--- POR QUE NAO E UM WATERMARK GLOBAL (corrigido em 2026-08-11)
+-- WHY THIS IS NOT A GLOBAL WATERMARK (fixed on 2026-08-11)
 --
--- A versao anterior comparava cada evento contra `MAX(ultimo_evento_ms)` da
--- tabela INTEIRA. Isso pressupoe que evento novo sempre chega com timestamp
--- maior que o de qualquer evento de qualquer outro pagamento -- premissa que
--- CDC nao garante. Bastava um evento cujo timestamp fosse anterior ao evento
--- mais recente de OUTRO pagamento para ele ser ignorado em silencio.
+-- The previous version compared each event against `MAX(ultimo_evento_ms)` of
+-- the ENTIRE table. That assumes a new event always arrives with a timestamp
+-- greater than any event of any other payment -- an assumption CDC does not
+-- guarantee. A single event whose timestamp predated the most recent event of
+-- ANOTHER payment was enough for it to be silently ignored.
 --
--- Reproduzido antes de corrigir, com dado real: um `captured` do pagamento
--- 55555555 com timestamp entre o `created` e o `closed` dele mesmo percorreu
--- Debezium, Kafka e sink, entrou na Bronze (`SUCCESS 1`) e na Silver
--- (`SUCCESS 1`), e a Gold devolveu `SUCCESS 0`. A Silver ficou com 4 eventos
--- e a Gold seguiu dizendo 3, com `capturado_em` nulo -- e os 26 testes da
--- cadeia passaram. Falha silenciosa, com o pipeline reportando sucesso.
+-- Reproduced before fixing, with real data: a `captured` for payment 55555555
+-- with a timestamp between its own `created` and `closed` travelled through
+-- Debezium, Kafka and the sink, landed in Bronze (`SUCCESS 1`) and in Silver
+-- (`SUCCESS 1`), and Gold returned `SUCCESS 0`. Silver held 4 events and Gold
+-- kept saying 3, with a null `capturado_em` -- and all 26 tests in the chain
+-- passed. A silent failure, with the pipeline reporting success.
 --
--- A comparacao agora e POR PAGAMENTO, e por contagem antes de timestamp:
--- `COUNT(*) <> total_eventos` pega qualquer evento novo independente da ordem
--- em que chegou, que e a unica formulacao robusta a entrega fora de ordem.
--- O `MAX(...) <> ultimo_evento_ms` fica como segunda guarda.
+-- The comparison is now PER PAYMENT, and by count before timestamp:
+-- `COUNT(*) <> total_eventos` catches any new event regardless of the order it
+-- arrived in, which is the only formulation robust to out-of-order delivery.
+-- The `MAX(...) <> ultimo_evento_ms` remains as a second guard.
 --
--- CUSTO. O `alvo` agora agrega a Silver inteira a cada execucao, em vez de
--- filtrar por um escalar. Nesta base sao milhares de linhas e o custo e
--- irrelevante; a Silver e reconstruida por inteiro a cada run de qualquer
--- forma (`materialized='table'`). Se a Silver crescer a ponto de esse
--- GROUP BY pesar, a saida e um watermark de INGESTAO (`dt_current_timestamp`)
--- em vez de tempo de evento -- nunca voltar ao maximo global.
+-- COST. `alvo` now aggregates all of Silver on every run, instead of filtering
+-- by a scalar. In this database that is thousands of rows and the cost is
+-- irrelevant; Silver is rebuilt in full on every run anyway
+-- (`materialized='table'`). If Silver grows until that GROUP BY hurts, the
+-- answer is an INGESTION watermark (`dt_current_timestamp`) rather than event
+-- time -- never a return to the global maximum.
 --
--- ATENCAO A CARDINALIDADE DOS DADOS ATUAIS (medida em 2026-08-10): os 2.210
--- eventos se distribuem em apenas 8 payment_id distintos, sete deles com mais
--- de 300 eventos cada. A estrutura do modelo esta certa, mas com esse dado ele
--- devolve 8 linhas e as duracoes nao tem significado de negocio -- o gerador
--- sintetico reaproveitou os identificadores. Vale conferir antes de usar
--- qualquer numero daqui em decisao.
+-- MIND THE CARDINALITY OF THE CURRENT DATA (measured 2026-08-10): the 2,210
+-- events are spread across only 8 distinct payment_ids, seven of them with
+-- more than 300 events each. The model's structure is right, but on this data
+-- it returns 8 rows and the durations carry no business meaning -- the
+-- synthetic generator reused the identifiers. Worth checking before using any
+-- number from here in a decision.
 --
--- Nao ha juncao com `orders`: `orders.payment_key` tem 410 valores distintos e
--- interseccao ZERO com `payment_events.payment_id`. Os dois nao referenciam o
--- mesmo espaco de identificadores nesta base.
+-- There is no join with `orders`: `orders.payment_key` has 410 distinct values
+-- and ZERO intersection with `payment_events.payment_id`. The two do not
+-- reference the same identifier space in this database.
 
 WITH alvo AS (
 
 {% if is_incremental() %}
 
-    -- Compara o estado de CADA pagamento na Silver contra o que a Gold ja
-    -- registrou dele. Um pagamento entra se e novo, se ganhou evento, ou se o
-    -- evento mais recente dele mudou. Nao ha watermark global aqui -- ver a
-    -- nota "POR QUE NAO E UM WATERMARK GLOBAL" no cabecalho.
+    -- Compares the state of EACH payment in Silver against what Gold already
+    -- recorded for it. A payment enters if it is new, if it gained an event,
+    -- or if its most recent event changed. There is no global watermark here
+    -- -- see the "WHY THIS IS NOT A GLOBAL WATERMARK" note in the header.
     SELECT e.payment_id
     FROM {{ ref('silver_payment_events') }} e
     LEFT JOIN {{ this }} t ON t.payment_id = e.payment_id

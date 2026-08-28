@@ -1,58 +1,60 @@
 version: 2
 
-# Silver -- os mesmos 10 dominios da Bronze, resolvidos ao estado atual da
-# entidade por resolve_cdc(). Como a macro faz SELECT * sobre o modelo
-# Bronze, todas as colunas atravessam sem reprojecao: a documentacao coluna a
-# coluna esta em models/bronze/schema.yml e NAO e duplicada aqui.
+# Silver -- the same 10 domains as Bronze, resolved to the entity's current
+# state by resolve_cdc(). Because the macro does SELECT * over the Bronze
+# model, every column passes through without reprojection: the column-by-column
+# documentation lives in models/bronze/schema.yml and is NOT duplicated here.
 #
-# O QUE ESTA CAMADA TESTA, ENTAO: as tres invariantes que a Silver adiciona e
-# que a Bronze nao tem como garantir.
+# WHAT THIS LAYER TESTS, THEN: the three invariants Silver adds and that Bronze
+# has no way to guarantee.
 #
-#   1. unique + not_null na chave -- a Silver colapsou N versoes CDC em 1
-#      linha por entidade. Na Bronze `unique` ja passa por causa da
-#      deduplicacao por lote; aqui ele passa a valer sobre o historico
-#      inteiro, que e uma afirmacao bem mais forte.
+#   1. unique + not_null on the key -- Silver collapsed N CDC versions into 1
+#      row per entity. In Bronze `unique` already passes because of the
+#      per-batch deduplication; here it comes to hold over the entire history,
+#      which is a much stronger assertion.
 #
-#   2. accepted_values em `op` SEM o 'd' -- este e o teste do filtro de
-#      delete de resolve_cdc. Se a estrategia de um dominio virar 'log' em
-#      CONFIG.TABLE_METADATA, a macro passa a preservar delete e este teste
-#      quebra de proposito, sinalizando que o schema.yml precisa acompanhar
-#      a mudanca de estrategia.
+#   2. accepted_values on `op` WITHOUT the 'd' -- this is the test of
+#      resolve_cdc's delete filter. If a domain's strategy becomes 'log' in
+#      CONFIG.TABLE_METADATA, the macro starts preserving deletes and this test
+#      breaks on purpose, signalling that schema.yml has to follow the strategy
+#      change.
 #
-#      Nota sobre NULL: `accepted_values` ignora nulo (NULL NOT IN (...) e
-#      NULL, nao TRUE), e resolve_cdc preserva linha com op nulo de proposito
-#      -- ver o item 2 do docstring da macro. Linha com op nulo e pega pelo
-#      not_null da Bronze, que roda antes; nao ha teste redundante aqui.
+#      Note on NULL: `accepted_values` ignores nulls (NULL NOT IN (...) is
+#      NULL, not TRUE), and resolve_cdc preserves a row with a null op on
+#      purpose -- see item 2 of the macro's docstring. A row with a null op is
+#      caught by Bronze's not_null, which runs first; there is no redundant
+#      test here.
 #
-#   3. not_null na chave tambem cobre o descarte de tombstone. Um tombstone
-#      que escapasse do filtro da Bronze chegaria aqui como linha de chave
-#      nula e derrubaria este teste.
+#   3. not_null on the key also covers the tombstone discard. A tombstone that
+#      escaped Bronze's filter would arrive here as a null-key row and would
+#      bring this test down.
 #
-# CONVENCAO DE SEVERIDADE -- PRIMEIRA APLICACAO NO PROJETO, A CONFIRMAR.
-# A Bronze usa severidade default (error) em tudo. Aqui:
+# SEVERITY CONVENTION -- FIRST APPLICATION IN THE PROJECT, TO BE CONFIRMED.
+# Bronze uses the default severity (error) everywhere. Here:
 #
-#   error (default) -> invariante que o codigo deste repo garante. Se falha,
-#                      ha bug no resolve_cdc ou no modelo Bronze.
-#   warn            -> integridade referencial entre dominios. Os 10 fluxos
-#                      CDC sao independentes e tem tempos de snapshot
-#                      proprios: um pedido pode chegar antes do entregador
-#                      dele, e isso e latencia normal, nao defeito. Derrubar
-#                      o pipeline por causa disso seria falso positivo.
+#   error (default) -> an invariant guaranteed by the code in this repo. If it
+#                      fails, there is a bug in resolve_cdc or in the Bronze
+#                      model.
+#   warn            -> referential integrity between domains. The 10 CDC
+#                      streams are independent and have their own snapshot
+#                      timings: an order can arrive before its driver, and that
+#                      is normal latency, not a defect. Bringing the pipeline
+#                      down over it would be a false positive.
 #
-# Isso conversa com o SHOULD de DEFINE_GOVERNANCA_QUALIDADE_DADOS ("existe
-# uma convencao proposta de severidade"), que segue como Draft nao confirmado.
+# This speaks to the SHOULD of DEFINE_GOVERNANCA_QUALIDADE_DADOS ("a proposed
+# severity convention exists"), which remains an unconfirmed Draft.
 
 models:
   - name: silver_orders
     description: >
-      Estado atual de cada pedido, um por order_id. Hub do modelo -- liga os demais dominios por chaves de negocio heterogeneas.
+      Current state of each order, one per order_id. The model's hub -- it links the other domains through heterogeneous business keys.
     columns:
       - name: order_id
-        description: "Chave da entidade. unique aqui vale sobre todo o historico CDC, nao so sobre o lote."
+        description: "Entity key. `unique` here holds over the whole CDC history, not just the batch."
         tests: [unique, not_null]
 
       - name: user_key
-        description: "CPF do usuario."
+        description: "User CPF."
         tests:
           - relationships:
               to: ref('silver_users_mongo')
@@ -61,7 +63,7 @@ models:
                 severity: warn
 
       - name: restaurant_key
-        description: "CNPJ do restaurante."
+        description: "Restaurant CNPJ."
         tests:
           - relationships:
               to: ref('silver_restaurants')
@@ -70,7 +72,7 @@ models:
                 severity: warn
 
       - name: driver_key
-        description: "driver_id do entregador. Nulo em pedido ainda nao atribuido -- relationships ignora nulo."
+        description: "Driver's driver_id. Null on an order not yet assigned -- `relationships` ignores nulls."
         tests:
           - relationships:
               to: ref('silver_drivers')
@@ -79,28 +81,28 @@ models:
                 severity: warn
 
       - name: op
-        description: "Operacao CDC. Sem 'd': resolve_cdc descarta delete na estrategia upsert."
+        description: "CDC operation. No 'd': resolve_cdc discards deletes under the upsert strategy."
         tests:
           - accepted_values:
               values: ['c', 'u', 'r']
 
       - name: source_ts_ms
-        description: "Epoch ms do commit no Postgres. Primeiro criterio de ordenacao da resolucao CDC."
+        description: "Epoch ms of the Postgres commit. First ordering criterion of the CDC resolution."
         tests: [not_null]
 
       - name: kafka_offset
-        description: "Offset no topico. Desempate deterministico da resolucao CDC."
+        description: "Offset in the topic. Deterministic tie-break of the CDC resolution."
         tests: [not_null]
 
   - name: silver_order_items
     description: >
-      Estado atual de cada item de linha, um por order_item_id. Maior volume do projeto.
+      Current state of each line item, one per order_item_id. Largest volume in the project.
     columns:
       - name: order_item_id
         tests: [unique, not_null]
 
       - name: order_id
-        description: "Pedido a que o item pertence."
+        description: "Order the item belongs to."
         tests:
           - not_null
           - relationships:
@@ -110,7 +112,7 @@ models:
                 severity: warn
 
       - name: restaurant_id
-        description: "ID numerico do restaurante."
+        description: "Numeric restaurant ID."
         tests:
           - relationships:
               to: ref('silver_restaurants')
@@ -131,18 +133,18 @@ models:
 
   - name: silver_payment_events
     description: >
-      Eventos do ciclo de pagamento, um por event_id. Event sourcing -- o upsert garante idempotencia contra reentrega, nao colapso de historico de negocio: os varios eventos de um mesmo payment_id continuam todos presentes.
+      Payment lifecycle events, one per event_id. Event sourcing -- the upsert guarantees idempotency against redelivery, not the collapse of business history: the many events of a single payment_id all remain present.
     columns:
       - name: event_id
         tests: [unique, not_null]
 
       - name: payment_id
         description: >
-          Pagamento a que o evento pertence. Sem teste de relationships: o dominio `payments` e Tier 2, removido do pipeline, e nao ha modelo com essa chave para apontar. orders.payment_key existe, mas nao esta documentado como o mesmo espaco de identificadores -- confirmar antes de criar o teste.
+          Payment the event belongs to. No relationships test: the `payments` domain is Tier 2, removed from the pipeline, and there is no model holding that key to point at. orders.payment_key exists, but is not documented as the same identifier space -- confirm before creating the test.
         tests: [not_null]
 
       - name: event_name
-        description: "Nome do evento no ciclo."
+        description: "Event name in the lifecycle."
         tests:
           - not_null
           - accepted_values:
@@ -163,17 +165,17 @@ models:
 
   - name: silver_search_events
     description: >
-      Buscas do usuario, uma por search_id. Dominio append-only na origem (203 linhas para 203 chaves, zero deletes em 2026-08-10), registrado como table_type='fact' com cdc_strategy='upsert'.
+      User searches, one per search_id. An append-only domain at the source (203 rows for 203 keys, zero deletes on 2026-08-10), registered as table_type='fact' with cdc_strategy='upsert'.
     columns:
       - name: search_id
         tests: [unique, not_null]
 
       - name: user_id
         description: >
-          ID numerico do usuario, nao CPF. Sem relationships para silver_users_mongo.user_id: a juncao e plausivel mas nao esta documentada como tal em models/bronze/schema.yml, e teste de integridade sobre juncao suposta gera ruido, nao sinal.
+          Numeric user ID, not CPF. No relationships to silver_users_mongo.user_id: the join is plausible but is not documented as such in models/bronze/schema.yml, and an integrity test over an assumed join produces noise, not signal.
 
       - name: op
-        description: "Se cdc_strategy deste dominio virar 'log', 'd' passa a ser valor legitimo e este teste precisa acompanhar."
+        description: "If this domain's cdc_strategy becomes 'log', 'd' becomes a legitimate value and this test has to follow."
         tests:
           - accepted_values:
               values: ['c', 'u', 'r']
@@ -186,20 +188,20 @@ models:
 
   - name: silver_recommendations
     description: >
-      Eventos de recomendacao de ML, um por event_id. Append-only na origem, mesmo padrao descrito em silver_search_events.
+      ML recommendation events, one per event_id. Append-only at the source, the same pattern described in silver_search_events.
     columns:
       - name: event_id
         tests: [unique, not_null]
 
       - name: event_type
         description: >
-          Tipo do evento de recomendacao. Vocabulario levantado dos dados em 2026-08-10, nao de documentacao: SELECT event_type, COUNT(*) GROUP BY 1 sobre as 255 linhas materializadas devolveu recommendation_served (78), add_to_cart (63), click (61), view (53). A lista anterior aqui -- view, click, purchase, dismiss -- vinha do comentario do modelo Bronze e estava errada nas duas pontas: purchase e dismiss nao ocorrem, add_to_cart e recommendation_served nao estavam listados.
+          Recommendation event type. Vocabulary taken from the data on 2026-08-10, not from documentation: SELECT event_type, COUNT(*) GROUP BY 1 over the 255 materialized rows returned recommendation_served (78), add_to_cart (63), click (61), view (53). The previous list here -- view, click, purchase, dismiss -- came from the Bronze model's comment and was wrong at both ends: purchase and dismiss do not occur, add_to_cart and recommendation_served were not listed.
         tests:
           - accepted_values:
-              # Segue em warn, mas mudou de natureza: era palpite, agora e
-              # detector de drift. Valor novo aqui significa categoria nova
-              # na origem, nao teste mal escrito -- e vale investigar antes
-              # de simplesmente estender a lista.
+              # Still at warn, but its nature changed: it was a guess, now it
+              # is a drift detector. A new value here means a new category at
+              # the source, not a badly written test -- and it is worth
+              # investigating before simply extending the list.
               values: ['recommendation_served', 'add_to_cart', 'click', 'view']
               config:
                 severity: warn
@@ -217,13 +219,13 @@ models:
 
   - name: silver_driver_shifts
     description: >
-      Estado atual de cada turno do entregador, um por shift_id. Turno em andamento recebe varios UPDATEs ate fechar -- e o dominio onde o desempate por kafka_offset mais importa.
+      Current state of each driver shift, one per shift_id. A shift in progress receives several UPDATEs before closing -- this is the domain where the kafka_offset tie-break matters most.
     columns:
       - name: shift_id
         tests: [unique, not_null]
 
       - name: driver_id
-        description: "Entregador do turno."
+        description: "Driver on the shift."
         tests:
           - not_null
           - relationships:
@@ -245,15 +247,15 @@ models:
 
   - name: silver_drivers
     description: >
-      Entregadores, um por uuid.
+      Delivery drivers, one per uuid.
     columns:
       - name: uuid
-        description: "Chave tecnica do CDC."
+        description: "CDC technical key."
         tests: [unique, not_null]
 
       - name: driver_id
         description: >
-          Chave de negocio -- e ela, nao o uuid, que orders.driver_key e driver_shifts.driver_id referenciam. unique em warn: duplicata nao quebra nada sozinha, mas provoca fan-out em toda juncao que usa esta coluna.
+          Business key -- it is this, not the uuid, that orders.driver_key and driver_shifts.driver_id reference. `unique` at warn: a duplicate breaks nothing on its own, but causes fan-out in every join that uses this column.
         tests:
           - not_null
           - unique:
@@ -273,13 +275,13 @@ models:
 
   - name: silver_restaurants
     description: >
-      Restaurantes, um por uuid.
+      Restaurants, one per uuid.
     columns:
       - name: uuid
         tests: [unique, not_null]
 
       - name: cnpj
-        description: "Chave de negocio referenciada por orders.restaurant_key. unique em warn pelo mesmo motivo de drivers.driver_id."
+        description: "Business key referenced by orders.restaurant_key. `unique` at warn for the same reason as drivers.driver_id."
         tests:
           - not_null
           - unique:
@@ -287,7 +289,7 @@ models:
                 severity: warn
 
       - name: restaurant_id
-        description: "ID numerico referenciado por order_items.restaurant_id."
+        description: "Numeric ID referenced by order_items.restaurant_id."
         tests:
           - unique:
               config:
@@ -306,13 +308,13 @@ models:
 
   - name: silver_users_mongo
     description: >
-      Usuarios (origem MongoDB), um por uuid. CPF e o que liga este modelo a orders e a silver_users_mssql -- os dois sistemas de origem tem uuids proprios e independentes para a mesma pessoa.
+      Users (MongoDB origin), one per uuid. CPF is what links this model to orders and to silver_users_mssql -- the two source systems have their own independent uuids for the same person.
     columns:
       - name: uuid
         tests: [unique, not_null]
 
       - name: cpf
-        description: "Chave de negocio referenciada por orders.user_key."
+        description: "Business key referenced by orders.user_key."
         tests:
           - not_null
           - unique:
@@ -332,14 +334,14 @@ models:
 
   - name: silver_users_mssql
     description: >
-      Perfil estendido do usuario (origem MSSQL), um por uuid. Junta com silver_users_mongo por CPF, nao por uuid.
+      Extended user profile (MSSQL origin), one per uuid. Joins silver_users_mongo on CPF, not on uuid.
     columns:
       - name: uuid
         tests: [unique, not_null]
 
       - name: cpf
         description: >
-          Mesmo CPF do silver_users_mongo. O relationships aponta para la em warn: os dois dominios sao fluxos CDC independentes, entao um perfil estendido pode chegar antes do usuario correspondente.
+          Same CPF as silver_users_mongo. The relationships test points there at warn: the two domains are independent CDC streams, so an extended profile can arrive before the matching user.
         tests:
           - not_null
           - unique:
