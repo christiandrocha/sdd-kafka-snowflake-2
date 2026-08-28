@@ -1,10 +1,23 @@
 # sdd-kafka-snowflake-2
 
+<p align="center"><strong>Change data capture into Snowflake — where asking &ldquo;did anything arrive?&rdquo; costs nothing.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/christiandrocha/sdd-kafka-snowflake-2/actions/workflows/ci.yml"><img src="https://github.com/christiandrocha/sdd-kafka-snowflake-2/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="docs/adr/0029_snowpipe_streaming_as_the_ingestion_path.md"><img src="https://img.shields.io/badge/snowflake-Snowpipe%20Streaming-29B5E8?labelColor=0d1117" alt="Snowpipe Streaming"></a>
+  <a href="#layered-modeling"><img src="https://img.shields.io/badge/dbt-26%20models-394150?labelColor=0d1117" alt="26 dbt models"></a>
+  <a href="#data-quality"><img src="https://img.shields.io/badge/dbt%20tests-0%20errors%2C%2010%20warnings-2c6e49?labelColor=0d1117" alt="185 tests"></a>
+  <a href="docs/adr/"><img src="https://img.shields.io/badge/ADRs-12-394150?labelColor=0d1117" alt="12 ADRs"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-394150?labelColor=0d1117" alt="MIT License"></a>
+</p>
+
 End-to-end **Change Data Capture** pipeline: PostgreSQL → Debezium → Kafka → Snowflake, with layered dbt modeling, Dagster orchestration, and observability through Prometheus + Grafana.
 
 What sets this project apart is not the stack — it is the **control**. Each domain's CDC strategy lives in a metadata table in Snowflake rather than in SQL; pipeline triggering passes through a gate that queries Kafka before waking the warehouse; and every layer's invariants are tested, with severity chosen case by case.
 
 > Source code comments and commit messages are written in Portuguese. This README is in English.
+
+[The problem](#the-problem) · [Architecture](#architecture) · [Cost governance](#cost-governance) · [Data quality](#data-quality) · [Running it](#running-it) · [Known gaps](#known-gaps-and-unverified-claims) · [ADRs](docs/adr/) · [Cheat sheet](#interview-cheat-sheet)
 
 ---
 
@@ -143,6 +156,39 @@ or a specific piece of work, and the ones that were closed are recorded in
 
 ## Architecture
 
+**The ingestion spine.** Everything left of Snowflake is streaming; the Schema
+Registry is the only place a contract is enforced rather than checked.
+
+```mermaid
+flowchart LR
+    PG[("PostgreSQL<br/>wal_level=logical")] -->|WAL| DBZ["Debezium"]
+    DBZ --> KAF["Kafka<br/>10 CDC topics"]
+    KAF --> SINK["Snowflake Sink v4<br/>Snowpipe Streaming"]
+    SINK --> BRZ[("BRONZE<br/>raw append-only CDC")]
+    DBZ -.->|"registers Avro"| SR["Schema Registry<br/>Avro · BACKWARD"]
+    SR -.->|"types + doc contract"| SINK
+```
+
+**Inside Snowflake, and what wakes it.** The gate is the load-bearing part: the
+`WHEN` predicate is evaluated in the control plane, so a false answer engages no
+warehouse. dbt is never triggered by a clock.
+
+```mermaid
+flowchart LR
+    BRZ[("BRONZE<br/>raw CDC")] --> SIL[("SILVER<br/>current state")]
+    SIL --> GLD[("GOLD<br/>6 aggregations")]
+    CFG[("CONFIG.TABLE_METADATA")] -.->|"strategy · key · types"| SIL
+    BRZ --> GATE{{"Streams + Triggered Tasks<br/>SYSTEM$STREAM_HAS_DATA"}}
+    GATE -->|"only when true"| PEN[("CONFIG.PENDING_RUNS")]
+    PEN -->|"one light SELECT"| DAG["Dagster sensor"]
+    DAG -->|"dbt run"| SIL
+    MON["Prometheus + Grafana"] -.->|"cost gate, before Snowflake"| DAG
+```
+
+
+<details>
+<summary>Same diagram as plain text</summary>
+
 ```
 ┌──────────────┐    WAL     ┌──────────────┐          ┌──────────────────┐
 │  PostgreSQL  │──────────► │   Debezium   │────────► │      Kafka       │
@@ -176,6 +222,8 @@ or a specific piece of work, and the ones that were closed are recorded in
       │ sensors + jobs │     (checks Kafka)       │     Grafana      │  Kafka Exporter
       └────────────────┘                          └──────────────────┘
 ```
+
+</details>
 
 ---
 
@@ -444,7 +492,7 @@ Silver reproduces the source row for row: 414 orders, 210,002 items, the same 7,
 
 ## Repository layout
 
-```
+```text
 connectors/           Debezium source + Snowflake sink (JSON configuration)
 dagster/pipeline/     dbt assets, jobs, cost-gated sensors, resources
 dbt/
