@@ -156,10 +156,20 @@ or a specific piece of work, and the ones that were closed are recorded in
 
 ## Architecture
 
-**The ingestion spine.** Everything left of Snowflake is streaming; the Schema
-Registry is the only place a contract is enforced rather than checked.
+**The ingestion spine.** Everything left of Snowflake is streaming. The Schema
+Registry is highlighted because it is the only place in the pipeline where a
+contract is *enforced* rather than checked — an incompatible schema is rejected
+at publication, before the data exists.
+
+<p align="center">
+  <img src="assets/architecture-ingestion.png" alt="PostgreSQL emits WAL to a Debezium source connector, which publishes to ten Kafka CDC topics and registers Avro schemas with the Schema Registry; the Schema Registry supplies types and the doc contract to the Snowflake Sink v4 connector, which lands rows into BRONZE through Snowpipe Streaming." width="100%">
+</p>
+
+<details>
+<summary>View diagram source</summary>
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#171c24','primaryTextColor':'#e9edf3','primaryBorderColor':'#2a323d','lineColor':'#5b6472','secondaryColor':'#1f2630','tertiaryColor':'#2a323d','background':'#12161c','mainBkg':'#171c24','nodeBorder':'#2a323d','titleColor':'#e9edf3','edgeLabelBackground':'#12161c','fontSize':'15px'},'flowchart':{'diagramPadding':18,'nodeSpacing':45,'rankSpacing':55}}}%%
 flowchart LR
     PG[("PostgreSQL<br/>wal_level=logical")] -->|WAL| DBZ["Debezium"]
     DBZ --> KAF["Kafka<br/>10 CDC topics"]
@@ -167,13 +177,30 @@ flowchart LR
     SINK --> BRZ[("BRONZE<br/>raw append-only CDC")]
     DBZ -.->|"registers Avro"| SR["Schema Registry<br/>Avro · BACKWARD"]
     SR -.->|"types + doc contract"| SINK
+
+    style PG fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style DBZ fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style KAF fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style SINK fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style BRZ fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style SR fill:#2b2118,stroke:#e3974e,color:#f2e3d2
 ```
 
-**Inside Snowflake, and what wakes it.** The gate is the load-bearing part: the
-`WHEN` predicate is evaluated in the control plane, so a false answer engages no
-warehouse. dbt is never triggered by a clock.
+</details>
+
+**Inside Snowflake, and what wakes it.** The gate is highlighted because it is the
+load-bearing decision: `SYSTEM$STREAM_HAS_DATA` is evaluated in the control plane,
+so a false answer engages no warehouse. dbt is never triggered by a clock.
+
+<p align="center">
+  <img src="assets/architecture-snowflake.png" alt="BRONZE feeds SILVER and GOLD through dbt, with CONFIG.TABLE_METADATA supplying strategy, key and types to SILVER; BRONZE also feeds Streams and Triggered Tasks, which write to CONFIG.PENDING_RUNS only when the stream has data, where one light SELECT by the Dagster sensor triggers the dbt run, with Prometheus gating on cost before Snowflake is touched." width="100%">
+</p>
+
+<details>
+<summary>View diagram source</summary>
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#171c24','primaryTextColor':'#e9edf3','primaryBorderColor':'#2a323d','lineColor':'#5b6472','secondaryColor':'#1f2630','tertiaryColor':'#2a323d','background':'#12161c','mainBkg':'#171c24','nodeBorder':'#2a323d','titleColor':'#e9edf3','edgeLabelBackground':'#12161c','fontSize':'15px'},'flowchart':{'diagramPadding':18,'nodeSpacing':45,'rankSpacing':55}}}%%
 flowchart LR
     BRZ[("BRONZE<br/>raw CDC")] --> SIL[("SILVER<br/>current state")]
     SIL --> GLD[("GOLD<br/>6 aggregations")]
@@ -183,8 +210,18 @@ flowchart LR
     PEN -->|"one light SELECT"| DAG["Dagster sensor"]
     DAG -->|"dbt run"| SIL
     MON["Prometheus + Grafana"] -.->|"cost gate, before Snowflake"| DAG
+
+    style BRZ fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style SIL fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style GLD fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style CFG fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style PEN fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style DAG fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style MON fill:#171c24,stroke:#2a323d,color:#e9edf3
+    style GATE fill:#2b2118,stroke:#e3974e,color:#f2e3d2
 ```
 
+</details>
 
 <details>
 <summary>Same diagram as plain text</summary>

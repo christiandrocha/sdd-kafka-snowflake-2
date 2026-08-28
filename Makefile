@@ -1,5 +1,5 @@
 .PHONY: up down logs register-connectors produce-initial produce-incremental dry-run \
-        dbt-parse dbt-run dbt-test lint yamllint security precommit-install ci-local
+        dbt-parse dbt-run dbt-test diagrams lint yamllint security precommit-install ci-local
 
 # ── Infrastructure ──────────────────────────────────────────────────────────
 up:
@@ -37,6 +37,11 @@ dbt-run:
 dbt-test:
 	docker compose exec dagster-daemon \
 	  bash -c "cd /opt/dagster/dbt && dbt test --select silver gold --target $${DBT_TARGET:-dev}"
+
+# ── Documentation ───────────────────────────────────────────────────────────
+# Re-renders assets/*.png from the ```mermaid blocks in README.md (single source).
+diagrams:
+	python3 scripts/render_diagrams.py
 
 # ── Quality ─────────────────────────────────────────────────────────────────
 lint:
