@@ -51,10 +51,15 @@ Each one is written down in [`docs/adr/`](docs/adr/) or under
 [Known gaps](#known-gaps-and-unverified-claims), including the ones that make the
 project look worse.
 
-> **Dataset framing:** 115k records across 52 JSON files is an architectural
-> microcosm, not a production volume. What is being validated is idempotency,
-> trigger economics and contract governance — the shape that has to hold when
-> real volume arrives.
+> **Dataset framing:** 215,082 records reached the landing tables across the ten
+> domains — and 210,005 of them are `order_items`. The other nine hold fewer than
+> 2,300 rows each. That is an architectural microcosm, not a production volume:
+> what is being validated is idempotency, trigger economics and contract
+> governance, the shape that has to hold when real volume arrives.
+>
+> Counted in Snowflake on 2026-08-28. The seed files under `tests/data/` are not
+> versioned, and the local copy is smaller than what was loaded — count the
+> warehouse, not the directory.
 
 ---
 
